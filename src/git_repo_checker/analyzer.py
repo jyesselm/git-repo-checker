@@ -29,6 +29,11 @@ def analyze_repo(repo_path: Path, config: Config) -> RepoInfo:
         branch = git_ops.get_current_branch(repo_path)
         status, changed, untracked = git_ops.get_repo_status(repo_path)
         has_remote = git_ops.has_upstream(repo_path)
+
+        # Fetch to get latest remote state before checking ahead/behind
+        if has_remote:
+            git_ops.fetch_repo(repo_path)
+
         ahead, behind = git_ops.get_remote_status(repo_path)
 
         final_status = git_ops.determine_remote_status(ahead, behind, status)
