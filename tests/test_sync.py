@@ -229,7 +229,7 @@ class TestCloneRepo:
             )
             result = sync.clone_repo(tracked_repo)
             assert result.action == SyncAction.ERROR
-            assert "Clone failed" in result.message
+            assert "Network error" in result.message
 
 
 class TestSyncAll:

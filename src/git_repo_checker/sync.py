@@ -231,6 +231,28 @@ def create_repos_file(output_path: Path) -> None:
     output_path.write_text(REPOS_TEMPLATE)
 
 
+def extract_git_error(message: str) -> str:
+    """Extract the key error from git output.
+
+    Looks for 'fatal:' or 'error:' lines and returns just that part.
+
+    Args:
+        message: Full git error output.
+
+    Returns:
+        Cleaned up error message.
+    """
+    for line in message.split("\n"):
+        line = line.strip()
+        if line.startswith("fatal:"):
+            return line[6:].strip()
+        if line.startswith("error:"):
+            return line[6:].strip()
+    # No fatal/error found, return last non-empty line
+    lines = [l.strip() for l in message.split("\n") if l.strip()]
+    return lines[-1] if lines else message
+
+
 def sync_repo(repo: TrackedRepo, pull_existing: bool = True) -> SyncRepoResult:
     """Sync a single tracked repository.
 
@@ -296,13 +318,13 @@ def handle_existing_repo(repo: TrackedRepo, pull_existing: bool) -> SyncRepoResu
         return SyncRepoResult(
             repo=repo,
             action=SyncAction.ERROR,
-            message=f"Pull failed: {result.message}",
+            message=f"Pull failed: {extract_git_error(result.message)}",
         )
     except git_ops.GitError as e:
         return SyncRepoResult(
             repo=repo,
             action=SyncAction.ERROR,
-            message=str(e),
+            message=extract_git_error(str(e)),
         )
 
 
@@ -328,13 +350,13 @@ def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
         return SyncRepoResult(
             repo=repo,
             action=SyncAction.ERROR,
-            message=f"Clone failed: {result.message}",
+            message=extract_git_error(result.message),
         )
     except git_ops.GitError as e:
         return SyncRepoResult(
             repo=repo,
             action=SyncAction.ERROR,
-            message=str(e),
+            message=extract_git_error(str(e)),
         )
 
 
