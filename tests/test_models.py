@@ -150,6 +150,7 @@ class TestTrackedRepo:
         repo = TrackedRepo(path=Path("/tmp/repo"), remote="git@github.com:u/r.git")
         assert repo.path == Path("/tmp/repo")
         assert repo.branch == "main"
+        assert repo.ignore is False
 
     def test_custom_branch(self):
         repo = TrackedRepo(
@@ -158,6 +159,14 @@ class TestTrackedRepo:
             branch="develop",
         )
         assert repo.branch == "develop"
+
+    def test_ignore_flag(self):
+        repo = TrackedRepo(
+            path=Path("/tmp/repo"),
+            remote="git@github.com:u/r.git",
+            ignore=True,
+        )
+        assert repo.ignore is True
 
 
 class TestSyncAction:

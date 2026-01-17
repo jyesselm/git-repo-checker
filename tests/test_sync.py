@@ -120,6 +120,20 @@ class TestParseTrackedRepo:
         repo = sync.parse_tracked_repo(raw)
         assert not str(repo.path).startswith("~")
 
+    def test_parses_ignore_flag(self):
+        raw = {
+            "path": "/tmp/repo",
+            "remote": "git@github.com:user/repo.git",
+            "ignore": True,
+        }
+        repo = sync.parse_tracked_repo(raw)
+        assert repo.ignore is True
+
+    def test_ignore_defaults_to_false(self):
+        raw = {"path": "/tmp/repo", "remote": "git@github.com:user/repo.git"}
+        repo = sync.parse_tracked_repo(raw)
+        assert repo.ignore is False
+
 
 class TestCreateReposFile:
     def test_creates_file(self, tmp_path):
@@ -252,3 +266,36 @@ class TestSyncAll:
             )
             result = sync.sync_all(repos)
             assert result.errors == 1
+
+    def test_skips_ignored_repos(self, tmp_path):
+        repos = [
+            TrackedRepo(
+                path=tmp_path / "repo1",
+                remote="git@github.com:u/r1.git",
+                ignore=True,
+            ),
+            TrackedRepo(path=tmp_path / "repo2", remote="git@github.com:u/r2.git"),
+        ]
+
+        with patch.object(sync, "sync_repo") as mock_sync:
+            mock_sync.return_value = sync.SyncRepoResult(
+                repo=repos[1], action=SyncAction.CLONED, message="Cloned"
+            )
+            result = sync.sync_all(repos)
+            assert result.skipped == 1
+            assert result.cloned == 1
+            # sync_repo should only be called once (for non-ignored repo)
+            assert mock_sync.call_count == 1
+
+    def test_ignored_repo_message(self, tmp_path):
+        repos = [
+            TrackedRepo(
+                path=tmp_path / "repo1",
+                remote="git@github.com:u/r1.git",
+                ignore=True,
+            ),
+        ]
+
+        result = sync.sync_all(repos)
+        assert result.skipped == 1
+        assert result.results[0].message == "Ignored"

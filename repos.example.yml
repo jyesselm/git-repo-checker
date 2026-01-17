@@ -12,7 +12,8 @@ repos:
   #
   # - path: ~/code/my-project
   #   remote: git@github.com:username/my-project.git
-  #   branch: main  # optional, defaults to main
+  #   branch: main    # optional, defaults to main
+  #   ignore: false   # optional, set to true to skip this repo
   #
   # - path: ~/code/another-repo
   #   remote: https://github.com/username/another-repo.git
@@ -20,3 +21,4 @@ repos:
   #
   # - path: ~/work/company-project
   #   remote: git@github.com:company/project.git
+  #   ignore: true    # temporarily skip syncing this repo

@@ -26,7 +26,8 @@ REPOS_TEMPLATE = """\
 repos:
   # - path: ~/code/my-project
   #   remote: git@github.com:username/my-project.git
-  #   branch: main  # optional, defaults to main
+  #   branch: main   # optional, defaults to main
+  #   ignore: false  # optional, set to true to skip this repo
 """
 
 
@@ -93,7 +94,7 @@ def parse_tracked_repo(raw: dict) -> TrackedRepo:
     """Parse a single tracked repo entry.
 
     Args:
-        raw: Dictionary with path, remote, and optional branch.
+        raw: Dictionary with path, remote, and optional branch/ignore.
 
     Returns:
         TrackedRepo object with expanded path.
@@ -103,6 +104,7 @@ def parse_tracked_repo(raw: dict) -> TrackedRepo:
         path=path,
         remote=raw["remote"],
         branch=raw.get("branch", "main"),
+        ignore=raw.get("ignore", False),
     )
 
 
@@ -248,6 +250,17 @@ def sync_all(repos: list[TrackedRepo], pull_existing: bool = True) -> SyncResult
     errors = 0
 
     for repo in repos:
+        if repo.ignore:
+            results.append(
+                SyncRepoResult(
+                    repo=repo,
+                    action=SyncAction.SKIPPED,
+                    message="Ignored",
+                )
+            )
+            skipped += 1
+            continue
+
         result = sync_repo(repo, pull_existing)
         results.append(result)
 

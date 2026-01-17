@@ -99,6 +99,7 @@ class TrackedRepo(BaseModel):
     path: Path
     remote: str
     branch: str = "main"
+    ignore: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
 
