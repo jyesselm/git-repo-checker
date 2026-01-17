@@ -29,6 +29,7 @@ def analyze_repo(repo_path: Path, config: Config) -> RepoInfo:
         branch = git_ops.get_current_branch(repo_path)
         status, changed, untracked = git_ops.get_repo_status(repo_path)
         has_remote = git_ops.has_upstream(repo_path)
+        repo_has_stash = git_ops.has_stash(repo_path)
 
         # Fetch to get latest remote state before checking ahead/behind
         if has_remote:
@@ -38,7 +39,7 @@ def analyze_repo(repo_path: Path, config: Config) -> RepoInfo:
 
         final_status = git_ops.determine_remote_status(ahead, behind, status)
         is_main = is_main_branch(branch, config.main_branches)
-        warnings = detect_warnings(branch, status, is_main, has_remote)
+        warnings = detect_warnings(branch, status, is_main, has_remote, repo_has_stash)
 
         return RepoInfo(
             path=repo_path,
@@ -49,6 +50,7 @@ def analyze_repo(repo_path: Path, config: Config) -> RepoInfo:
             behind_count=behind,
             changed_files=changed,
             untracked_files=untracked,
+            has_stash=repo_has_stash,
             warnings=warnings,
         )
     except git_ops.GitError as e:
@@ -78,6 +80,7 @@ def detect_warnings(
     status: RepoStatus,
     is_main: bool,
     has_remote: bool,
+    has_stash: bool = False,
 ) -> list[WarningType]:
     """Detect warning conditions for a repository.
 
@@ -86,6 +89,7 @@ def detect_warnings(
         status: Repository working tree status.
         is_main: Whether currently on main branch.
         has_remote: Whether upstream is configured.
+        has_stash: Whether repository has stashed changes.
 
     Returns:
         List of applicable warnings.
@@ -100,6 +104,9 @@ def detect_warnings(
 
     if branch == "HEAD":
         warnings.append(WarningType.DETACHED)
+
+    if has_stash:
+        warnings.append(WarningType.HAS_STASH)
 
     return warnings
 

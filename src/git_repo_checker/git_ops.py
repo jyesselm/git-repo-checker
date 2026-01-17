@@ -247,6 +247,21 @@ def fetch_repo(repo_path: Path) -> bool:
     return result.returncode == 0
 
 
+def has_stash(repo_path: Path) -> bool:
+    """Check if repository has stashed changes.
+
+    Args:
+        repo_path: Path to repository root.
+
+    Returns:
+        True if there are stashed changes.
+    """
+    result = run_git_command(repo_path, ["stash", "list"])
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
+
+
 def clone_repo(remote: str, target_path: Path, branch: str = "main") -> PullResult:
     """Clone a repository from a remote URL.
 

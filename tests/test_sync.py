@@ -174,7 +174,7 @@ class TestSyncRepo:
                 action=SyncAction.SKIPPED,
                 message="Already exists",
             )
-            result = sync.sync_repo(tracked_repo)
+            sync.sync_repo(tracked_repo)
             mock_handle.assert_called_once()
 
 
@@ -241,12 +241,8 @@ class TestSyncAll:
 
         with patch.object(sync, "sync_repo") as mock_sync:
             mock_sync.side_effect = [
-                sync.SyncRepoResult(
-                    repo=repos[0], action=SyncAction.CLONED, message="Cloned"
-                ),
-                sync.SyncRepoResult(
-                    repo=repos[1], action=SyncAction.SKIPPED, message="Skipped"
-                ),
+                sync.SyncRepoResult(repo=repos[0], action=SyncAction.CLONED, message="Cloned"),
+                sync.SyncRepoResult(repo=repos[1], action=SyncAction.SKIPPED, message="Skipped"),
             ]
             result = sync.sync_all(repos)
             assert result.cloned == 1
@@ -299,3 +295,129 @@ class TestSyncAll:
         result = sync.sync_all(repos)
         assert result.skipped == 1
         assert result.results[0].message == "Ignored"
+
+
+class TestApplyPathPrefix:
+    def test_absolute_path_unchanged(self):
+        result = sync.apply_path_prefix("/absolute/path", "~/code")
+        assert result == Path("/absolute/path")
+
+    def test_relative_path_with_prefix(self, tmp_path):
+        result = sync.apply_path_prefix("my-repo", str(tmp_path))
+        assert result == tmp_path / "my-repo"
+
+    def test_home_expansion(self):
+        result = sync.apply_path_prefix("code/repo", "~")
+        assert result == Path.home() / "code" / "repo"
+
+    def test_nested_relative_path(self, tmp_path):
+        result = sync.apply_path_prefix("work/project", str(tmp_path))
+        assert result == tmp_path / "work" / "project"
+
+
+class TestGetEffectivePathPrefix:
+    def test_cli_prefix_takes_priority(self, monkeypatch):
+        monkeypatch.setattr(sync, "load_local_config", lambda: {"path_prefix": "/local"})
+        result = sync.get_effective_path_prefix("~/file", "/cli")
+        assert result == "/cli"
+
+    def test_local_config_over_file(self, monkeypatch):
+        monkeypatch.setattr(sync, "load_local_config", lambda: {"path_prefix": "/local"})
+        result = sync.get_effective_path_prefix("~/file", None)
+        assert result == "/local"
+
+    def test_file_prefix_as_fallback(self, monkeypatch):
+        monkeypatch.setattr(sync, "load_local_config", lambda: {})
+        result = sync.get_effective_path_prefix("~/file", None)
+        assert result == "~/file"
+
+
+class TestLoadLocalConfig:
+    def test_returns_empty_when_no_file(self, monkeypatch):
+        monkeypatch.setattr(sync, "LOCAL_CONFIG_PATH", Path("/nonexistent/path.yml"))
+        result = sync.load_local_config()
+        assert result == {}
+
+    def test_loads_config_from_file(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "local.yml"
+        config_file.write_text("path_prefix: /custom/path")
+        monkeypatch.setattr(sync, "LOCAL_CONFIG_PATH", config_file)
+        result = sync.load_local_config()
+        assert result["path_prefix"] == "/custom/path"
+
+
+class TestLoadReposWithPathPrefix:
+    def test_loads_with_file_prefix(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            f"""\
+path_prefix: {tmp_path}
+repos:
+  - path: repo1
+    remote: git@github.com:user/repo1.git
+"""
+        )
+        repos = sync.load_repos_from_path(repos_path)
+        assert repos[0].path == tmp_path / "repo1"
+
+    def test_loads_with_cli_override(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        custom_path = tmp_path / "custom"
+        repos_path.write_text(
+            """\
+path_prefix: ~/code
+repos:
+  - path: repo1
+    remote: git@github.com:user/repo1.git
+"""
+        )
+        repos = sync.load_repos_from_path(repos_path, str(custom_path))
+        assert repos[0].path == custom_path / "repo1"
+
+    def test_absolute_path_ignores_prefix(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            """\
+path_prefix: ~/code
+repos:
+  - path: /absolute/repo
+    remote: git@github.com:user/repo.git
+"""
+        )
+        repos = sync.load_repos_from_path(repos_path)
+        assert repos[0].path == Path("/absolute/repo")
+
+
+class TestFetchReposFromUrl:
+    def test_fetches_and_saves(self, tmp_path):
+        output_path = tmp_path / "repos.yml"
+        mock_content = b"repos:\n  - path: test\n    remote: git@test.com:u/r.git"
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.read.return_value = mock_content
+            mock_response.__enter__ = lambda s: mock_response
+            mock_response.__exit__ = lambda s, *args: None
+            mock_urlopen.return_value = mock_response
+
+            result = sync.fetch_repos_from_url("https://example.com/repos.yml", output_path)
+
+            assert result == output_path
+            assert output_path.exists()
+            assert "repos:" in output_path.read_text()
+
+    def test_creates_parent_dirs(self, tmp_path):
+        output_path = tmp_path / "nested" / "dir" / "repos.yml"
+        mock_content = b"repos: []"
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.read.return_value = mock_content
+            mock_response.__enter__ = lambda s: mock_response
+            mock_response.__exit__ = lambda s, *args: None
+            mock_urlopen.return_value = mock_response
+
+            result = sync.fetch_repos_from_url("https://example.com/repos.yml", output_path)
+
+            assert result == output_path
+            assert output_path.exists()

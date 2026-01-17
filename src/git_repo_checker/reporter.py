@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from git_repo_checker.models import (
+    CIStatus,
     OutputConfig,
     PullResult,
     RepoInfo,
@@ -26,10 +27,19 @@ STATUS_STYLES = {
     RepoStatus.ERROR: ("red bold", "error"),
 }
 
+CI_STATUS_STYLES = {
+    CIStatus.PASSING: ("green", "passing"),
+    CIStatus.FAILING: ("red", "failing"),
+    CIStatus.PENDING: ("yellow", "pending"),
+    CIStatus.NO_WORKFLOWS: ("dim", "none"),
+    CIStatus.UNKNOWN: ("dim", "?"),
+}
+
 WARNING_MESSAGES = {
     WarningType.DIRTY_MAIN: "Uncommitted changes on main branch",
     WarningType.NO_REMOTE: "No upstream remote configured",
     WarningType.DETACHED: "Detached HEAD state",
+    WarningType.HAS_STASH: "Has stashed changes",
 }
 
 
@@ -46,13 +56,14 @@ class Reporter:
         self.console = console
         self.config = config
 
-    def display_results(self, result: ScanResult) -> None:
+    def display_results(self, result: ScanResult, show_ci: bool = False) -> None:
         """Display full scan results.
 
         Shows summary, repo table, warnings, and pull results.
 
         Args:
             result: Scan result to display.
+            show_ci: Whether to display CI status column.
         """
         if self.config.verbosity == "quiet":
             self.display_quiet_summary(result)
@@ -62,7 +73,7 @@ class Reporter:
 
         repos_to_show = self.filter_repos(result.repos)
         if repos_to_show:
-            self.display_repo_table(repos_to_show)
+            self.display_repo_table(repos_to_show, show_ci=show_ci)
 
         repos_with_warnings = [r for r in result.repos if r.warnings]
         if repos_with_warnings:
@@ -84,11 +95,12 @@ class Reporter:
             return repos
         return [r for r in repos if r.status != RepoStatus.CLEAN]
 
-    def display_repo_table(self, repos: list[RepoInfo]) -> None:
+    def display_repo_table(self, repos: list[RepoInfo], show_ci: bool = False) -> None:
         """Display repositories in a table format.
 
         Args:
             repos: List of repository info to display.
+            show_ci: Whether to display CI status column.
         """
         table = Table(title="Repositories", expand=True)
         table.add_column("Path", style="blue", no_wrap=True)
@@ -96,6 +108,8 @@ class Reporter:
         table.add_column("Status")
         table.add_column("Changes", justify="right")
         table.add_column("Ahead/Behind", justify="center")
+        if show_ci:
+            table.add_column("CI", justify="center")
 
         for repo in repos:
             status_style, status_text = STATUS_STYLES.get(
@@ -105,15 +119,36 @@ class Reporter:
             ahead_behind = self.format_ahead_behind(repo)
             path_str = self.shorten_path(repo.path)
 
-            table.add_row(
+            row = [
                 path_str,
                 repo.branch,
                 f"[{status_style}]{status_text}[/]",
                 changes,
                 ahead_behind,
-            )
+            ]
+
+            if show_ci:
+                ci_str = self.format_ci_status(repo.ci_status)
+                row.append(ci_str)
+
+            table.add_row(*row)
 
         self.console.print(table)
+
+    def format_ci_status(self, ci_status: CIStatus | None) -> str:
+        """Format CI status for display.
+
+        Args:
+            ci_status: CI status to format.
+
+        Returns:
+            Formatted CI status string.
+        """
+        if ci_status is None:
+            return "-"
+
+        style, text = CI_STATUS_STYLES.get(ci_status, ("dim", "?"))
+        return f"[{style}]{text}[/]"
 
     def display_warnings(self, repos: list[RepoInfo]) -> None:
         """Display warning panel for repos with issues.

@@ -155,6 +155,7 @@ class TestScanDirectory:
         hidden = tmp_path / ".hidden"
         hidden.mkdir()
         import subprocess
+
         subprocess.run(["git", "init"], cwd=hidden, capture_output=True, check=True)
 
         repos = list(

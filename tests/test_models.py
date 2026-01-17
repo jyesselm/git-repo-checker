@@ -4,10 +4,12 @@ from pathlib import Path
 
 from git_repo_checker.models import (
     AutoPullConfig,
+    CIStatus,
     Config,
     OutputConfig,
     PullResult,
     RepoInfo,
+    ReposConfig,
     RepoStatus,
     ScanResult,
     SyncAction,
@@ -20,7 +22,16 @@ from git_repo_checker.models import (
 
 class TestRepoStatus:
     def test_all_status_values_exist(self):
-        expected = ["clean", "dirty", "untracked", "ahead", "behind", "diverged", "no_remote", "error"]
+        expected = [
+            "clean",
+            "dirty",
+            "untracked",
+            "ahead",
+            "behind",
+            "diverged",
+            "no_remote",
+            "error",
+        ]
         actual = [s.value for s in RepoStatus]
         assert sorted(actual) == sorted(expected)
 
@@ -29,9 +40,20 @@ class TestRepoStatus:
         assert RepoStatus.DIRTY.value == "dirty"
 
 
+class TestCIStatus:
+    def test_all_ci_status_values_exist(self):
+        expected = ["passing", "failing", "pending", "none", "unknown"]
+        actual = [s.value for s in CIStatus]
+        assert sorted(actual) == sorted(expected)
+
+    def test_ci_status_is_string_enum(self):
+        assert CIStatus.PASSING == "passing"
+        assert CIStatus.FAILING.value == "failing"
+
+
 class TestWarningType:
     def test_all_warning_values_exist(self):
-        expected = ["dirty_main", "no_remote", "detached"]
+        expected = ["dirty_main", "no_remote", "detached", "has_stash"]
         actual = [w.value for w in WarningType]
         assert sorted(actual) == sorted(expected)
 
@@ -197,3 +219,20 @@ class TestSyncResultModel:
         assert result.cloned == 2
         assert result.pulled == 1
         assert result.errors == 1
+
+
+class TestReposConfig:
+    def test_defaults(self):
+        config = ReposConfig()
+        assert config.path_prefix == "~"
+        assert config.repos == []
+
+    def test_with_prefix(self):
+        config = ReposConfig(path_prefix="~/code")
+        assert config.path_prefix == "~/code"
+
+    def test_with_repos(self):
+        repo = TrackedRepo(path=Path("/tmp/repo"), remote="git@github.com:u/r.git")
+        config = ReposConfig(path_prefix="/custom", repos=[repo])
+        assert len(config.repos) == 1
+        assert config.path_prefix == "/custom"

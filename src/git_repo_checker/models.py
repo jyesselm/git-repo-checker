@@ -19,12 +19,23 @@ class RepoStatus(str, Enum):
     ERROR = "error"
 
 
+class CIStatus(str, Enum):
+    """Status of CI/CD workflows."""
+
+    PASSING = "passing"
+    FAILING = "failing"
+    PENDING = "pending"
+    NO_WORKFLOWS = "none"
+    UNKNOWN = "unknown"
+
+
 class WarningType(str, Enum):
     """Types of warnings for bad practices."""
 
     DIRTY_MAIN = "dirty_main"
     NO_REMOTE = "no_remote"
     DETACHED = "detached"
+    HAS_STASH = "has_stash"
 
 
 class RepoInfo(BaseModel):
@@ -38,6 +49,8 @@ class RepoInfo(BaseModel):
     behind_count: int = 0
     changed_files: int = 0
     untracked_files: int = 0
+    has_stash: bool = False
+    ci_status: CIStatus | None = None
     warnings: list[WarningType] = Field(default_factory=list)
     error_message: str | None = None
 
@@ -100,6 +113,15 @@ class TrackedRepo(BaseModel):
     remote: str
     branch: str = "main"
     ignore: bool = False
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class ReposConfig(BaseModel):
+    """Configuration for repos.yml file with path prefix support."""
+
+    path_prefix: str = "~"
+    repos: list["TrackedRepo"] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 

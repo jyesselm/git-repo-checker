@@ -1,5 +1,6 @@
 """Sync tracked repositories across machines."""
 
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -23,12 +24,100 @@ REPOS_TEMPLATE = """\
 # Tracked repositories for git-repo-checker sync
 # These repos will be cloned if missing, pulled if they exist
 
+# Path prefix for all repos - override with --path-prefix for different machines
+# Example: path_prefix: ~/code  (local) vs  path_prefix: /cluster/user/code  (cluster)
+path_prefix: ~
+
 repos:
-  # - path: ~/code/my-project
+  # - path: code/my-project           # relative to path_prefix
   #   remote: git@github.com:username/my-project.git
   #   branch: main   # optional, defaults to main
   #   ignore: false  # optional, set to true to skip this repo
 """
+
+LOCAL_CONFIG_PATH = Path.home() / ".config" / "git-repo-checker" / "local.yml"
+
+
+def fetch_repos_from_url(url: str, output_path: Path | None = None) -> Path:
+    """Fetch repos.yml from a URL and save locally.
+
+    Args:
+        url: URL to fetch repos.yml from (e.g., GitHub raw URL).
+        output_path: Where to save the file. Defaults to ~/.config/git-repo-checker/repos.yml
+
+    Returns:
+        Path where the file was saved.
+
+    Raises:
+        URLError: If fetch fails.
+    """
+    if output_path is None:
+        output_path = Path.home() / ".config" / "git-repo-checker" / "repos.yml"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with urllib.request.urlopen(url, timeout=30) as response:
+        content = response.read().decode("utf-8")
+
+    output_path.write_text(content)
+    return output_path
+
+
+def load_local_config() -> dict:
+    """Load local machine config for path overrides.
+
+    Returns:
+        Dictionary with local config or empty dict if not found.
+    """
+    if not LOCAL_CONFIG_PATH.exists():
+        return {}
+
+    with open(LOCAL_CONFIG_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_effective_path_prefix(file_prefix: str, cli_prefix: str | None = None) -> str:
+    """Get the effective path prefix to use.
+
+    Priority: CLI flag > local config > repos file.
+
+    Args:
+        file_prefix: Path prefix from repos.yml file.
+        cli_prefix: Path prefix from CLI flag (if provided).
+
+    Returns:
+        The effective path prefix to use.
+    """
+    if cli_prefix is not None:
+        return cli_prefix
+
+    local_config = load_local_config()
+    local_prefix = local_config.get("path_prefix")
+    if local_prefix is not None:
+        return str(local_prefix)
+
+    return file_prefix
+
+
+def apply_path_prefix(repo_path: str, prefix: str) -> Path:
+    """Apply path prefix to a repo path.
+
+    Args:
+        repo_path: The repo path (can be relative or absolute).
+        prefix: The path prefix to apply.
+
+    Returns:
+        Resolved absolute path.
+    """
+    path = Path(repo_path)
+
+    # If path is absolute, use it directly
+    if path.is_absolute():
+        return path.expanduser().resolve()
+
+    # Apply prefix for relative paths
+    prefix_path = Path(prefix).expanduser()
+    return (prefix_path / path).resolve()
 
 
 def find_repos_file() -> Path | None:
@@ -44,11 +133,15 @@ def find_repos_file() -> Path | None:
     return None
 
 
-def load_repos_file(repos_path: Path | None = None) -> list[TrackedRepo]:
+def load_repos_file(
+    repos_path: Path | None = None,
+    path_prefix: str | None = None,
+) -> list[TrackedRepo]:
     """Load tracked repositories from YAML file.
 
     Args:
         repos_path: Explicit path to repos file. If None, searches default locations.
+        path_prefix: Override path prefix from CLI.
 
     Returns:
         List of TrackedRepo objects.
@@ -65,14 +158,18 @@ def load_repos_file(repos_path: Path | None = None) -> list[TrackedRepo]:
             "No repos file found. Create one with 'grc sync --init' or specify with --repos"
         )
 
-    return load_repos_from_path(repos_path)
+    return load_repos_from_path(repos_path, path_prefix)
 
 
-def load_repos_from_path(repos_path: Path) -> list[TrackedRepo]:
+def load_repos_from_path(
+    repos_path: Path,
+    path_prefix: str | None = None,
+) -> list[TrackedRepo]:
     """Load and parse repos from a specific path.
 
     Args:
         repos_path: Path to the YAML repos file.
+        path_prefix: Override path prefix from CLI.
 
     Returns:
         List of TrackedRepo objects.
@@ -83,23 +180,28 @@ def load_repos_from_path(repos_path: Path) -> list[TrackedRepo]:
     with open(repos_path) as f:
         raw = yaml.safe_load(f) or {}
 
+    # Get path prefix from file, with possible override
+    file_prefix = raw.get("path_prefix", "~")
+    effective_prefix = get_effective_path_prefix(file_prefix, path_prefix)
+
     repos_raw = raw.get("repos", [])
     if not repos_raw:
         return []
 
-    return [parse_tracked_repo(r) for r in repos_raw]
+    return [parse_tracked_repo(r, effective_prefix) for r in repos_raw]
 
 
-def parse_tracked_repo(raw: dict) -> TrackedRepo:
+def parse_tracked_repo(raw: dict, path_prefix: str = "~") -> TrackedRepo:
     """Parse a single tracked repo entry.
 
     Args:
         raw: Dictionary with path, remote, and optional branch/ignore.
+        path_prefix: Path prefix to apply to relative paths.
 
     Returns:
         TrackedRepo object with expanded path.
     """
-    path = Path(raw["path"]).expanduser().resolve()
+    path = apply_path_prefix(raw["path"], path_prefix)
     return TrackedRepo(
         path=path,
         remote=raw["remote"],

@@ -228,9 +228,7 @@ class TestCloneRepo:
     def test_clone_failure(self, tmp_path):
         target = tmp_path / "cloned-repo"
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=1, stdout="", stderr="fatal: not found"
-            )
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="fatal: not found")
             result = git_ops.clone_repo("git@github.com:u/r.git", target, "main")
             assert result.success is False
             assert "not found" in result.message
