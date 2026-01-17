@@ -127,6 +127,10 @@ def scan(
         bool,
         typer.Option("-q", "--quiet", help="Minimal output"),
     ] = False,
+    workers: Annotated[
+        int | None,
+        typer.Option("--workers", "-j", help="Number of parallel workers (default: auto)"),
+    ] = None,
 ) -> None:
     """Scan directories for git repositories.
 
@@ -150,7 +154,7 @@ def scan(
     if warnings_only:
         config.output.show_clean = False
 
-    result = scan_and_analyze(config, auto_pull=config.auto_pull.enabled)
+    result = scan_and_analyze(config, auto_pull=config.auto_pull.enabled, max_workers=workers)
 
     # Check CI status if requested
     if check_ci:
@@ -263,6 +267,10 @@ def sync(
         bool,
         typer.Option("-q", "--quiet", help="Minimal output"),
     ] = False,
+    workers: Annotated[
+        int | None,
+        typer.Option("--workers", "-j", help="Number of parallel workers (default: auto)"),
+    ] = None,
 ) -> None:
     """Sync tracked repositories - clone missing, pull existing.
 
@@ -286,7 +294,7 @@ def sync(
         return
 
     console.print(f"Syncing [bold]{len(repos)}[/] tracked repositories...\n")
-    result = sync_module.sync_all(repos, pull_existing=not no_pull)
+    result = sync_module.sync_all(repos, pull_existing=not no_pull, max_workers=workers)
     _display_sync_results(result, quiet)
 
 

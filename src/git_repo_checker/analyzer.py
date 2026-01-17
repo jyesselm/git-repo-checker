@@ -1,5 +1,6 @@
 """Analyze repository state and detect issues."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from git_repo_checker import git_ops, scanner
@@ -155,7 +156,9 @@ def matches_skip_pattern(path: Path, patterns: list[str]) -> bool:
     return scanner.matches_any_pattern(path, patterns)
 
 
-def scan_and_analyze(config: Config, auto_pull: bool = True) -> ScanResult:
+def scan_and_analyze(
+    config: Config, auto_pull: bool = True, max_workers: int | None = None
+) -> ScanResult:
     """Scan all configured paths and analyze each repository.
 
     Main orchestration function that ties scanning, analysis,
@@ -164,6 +167,8 @@ def scan_and_analyze(config: Config, auto_pull: bool = True) -> ScanResult:
     Args:
         config: Application configuration.
         auto_pull: Whether to perform auto-pull on eligible repos.
+        max_workers: Maximum number of threads for parallel analysis.
+            Defaults to min(32, cpu_count + 4).
 
     Returns:
         ScanResult with all repos and pull results.
@@ -180,17 +185,30 @@ def scan_and_analyze(config: Config, auto_pull: bool = True) -> ScanResult:
         )
     )
 
-    for repo_path in repo_paths:
-        repo_info = analyze_repo(repo_path, config)
-        repos.append(repo_info)
+    # Analyze repos in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {
+            executor.submit(analyze_repo, repo_path, config): repo_path
+            for repo_path in repo_paths
+        }
 
-        if auto_pull and should_auto_pull(repo_info, config):
-            result = git_ops.pull_repo(repo_path)
-            pull_results.append(result)
+        for future in as_completed(future_to_path):
+            repo_info = future.result()
+            repos.append(repo_info)
 
-            if result.success:
-                repo_info.status = RepoStatus.CLEAN
-                repo_info.behind_count = 0
+    # Sort by path for consistent output
+    repos.sort(key=lambda r: r.path)
+
+    # Auto-pull must be sequential to avoid conflicts
+    if auto_pull:
+        for repo_info in repos:
+            if should_auto_pull(repo_info, config):
+                result = git_ops.pull_repo(repo_info.path)
+                pull_results.append(result)
+
+                if result.success:
+                    repo_info.status = RepoStatus.CLEAN
+                    repo_info.behind_count = 0
 
     return ScanResult(
         repos=repos,

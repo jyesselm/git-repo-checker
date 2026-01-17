@@ -138,7 +138,9 @@ class TestSyncCommand:
 
     def test_sync_no_repos_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, ["sync"])
+        # Mock DEFAULT_REPOS_LOCATIONS to only check current dir (not ~/.config)
+        with patch("git_repo_checker.sync.DEFAULT_REPOS_LOCATIONS", [Path("./repos.yml")]):
+            result = runner.invoke(app, ["sync"])
         assert result.exit_code == 1
         assert "Error" in result.stdout
 

@@ -1,0 +1,12 @@
+# Tracked repositories for git-repo-checker sync
+# These repos will be cloned if missing, pulled if they exist
+
+# Path prefix for all repos - override with --path-prefix for different machines
+# Example: path_prefix: ~/code  (local) vs  path_prefix: /cluster/user/code  (cluster)
+path_prefix: ~
+
+repos:
+  # - path: code/my-project           # relative to path_prefix
+  #   remote: git@github.com:username/my-project.git
+  #   branch: main   # optional, defaults to main
+  #   ignore: false  # optional, set to true to skip this repo

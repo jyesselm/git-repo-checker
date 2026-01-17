@@ -2,6 +2,7 @@
 
 import re
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
@@ -337,12 +338,16 @@ def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
         )
 
 
-def sync_all(repos: list[TrackedRepo], pull_existing: bool = True) -> SyncResult:
+def sync_all(
+    repos: list[TrackedRepo], pull_existing: bool = True, max_workers: int | None = None
+) -> SyncResult:
     """Sync all tracked repositories.
 
     Args:
         repos: List of repositories to sync.
         pull_existing: Whether to pull repos that already exist.
+        max_workers: Maximum number of threads for parallel sync.
+            Defaults to min(32, cpu_count + 4).
 
     Returns:
         SyncResult with all individual results and counts.
@@ -353,6 +358,8 @@ def sync_all(repos: list[TrackedRepo], pull_existing: bool = True) -> SyncResult
     skipped = 0
     errors = 0
 
+    # Handle ignored repos first (no I/O needed)
+    active_repos = []
     for repo in repos:
         if repo.ignore:
             results.append(
@@ -363,19 +370,31 @@ def sync_all(repos: list[TrackedRepo], pull_existing: bool = True) -> SyncResult
                 )
             )
             skipped += 1
-            continue
-
-        result = sync_repo(repo, pull_existing)
-        results.append(result)
-
-        if result.action == SyncAction.CLONED:
-            cloned += 1
-        elif result.action == SyncAction.PULLED:
-            pulled += 1
-        elif result.action == SyncAction.SKIPPED:
-            skipped += 1
         else:
-            errors += 1
+            active_repos.append(repo)
+
+    # Sync active repos in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_repo = {
+            executor.submit(sync_repo, repo, pull_existing): repo
+            for repo in active_repos
+        }
+
+        for future in as_completed(future_to_repo):
+            result = future.result()
+            results.append(result)
+
+            if result.action == SyncAction.CLONED:
+                cloned += 1
+            elif result.action == SyncAction.PULLED:
+                pulled += 1
+            elif result.action == SyncAction.SKIPPED:
+                skipped += 1
+            else:
+                errors += 1
+
+    # Sort results by path for consistent output
+    results.sort(key=lambda r: r.repo.path)
 
     return SyncResult(
         results=results,
