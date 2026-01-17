@@ -278,20 +278,25 @@ def get_remote_url(repo_path: Path, remote_name: str = "origin") -> str | None:
     return result.stdout.strip()
 
 
-def clone_repo(remote: str, target_path: Path, branch: str = "main") -> PullResult:
+def clone_repo(
+    remote: str, target_path: Path, branch: str | None = "main"
+) -> PullResult:
     """Clone a repository from a remote URL.
 
     Args:
         remote: The remote URL to clone from.
         target_path: Where to clone the repository.
-        branch: Branch to checkout after cloning.
+        branch: Branch to checkout after cloning. If None, uses default branch.
 
     Returns:
         PullResult with success status and message.
     """
     import subprocess
 
-    cmd = ["git", "clone", "--branch", branch, remote, str(target_path)]
+    if branch:
+        cmd = ["git", "clone", "--branch", branch, remote, str(target_path)]
+    else:
+        cmd = ["git", "clone", remote, str(target_path)]
 
     try:
         result = subprocess.run(
@@ -313,7 +318,7 @@ def clone_repo(remote: str, target_path: Path, branch: str = "main") -> PullResu
         return PullResult(
             path=target_path,
             success=True,
-            message=f"Cloned {branch} branch",
+            message=f"Cloned {branch or 'default'} branch",
         )
     except subprocess.TimeoutExpired:
         return PullResult(

@@ -328,8 +328,24 @@ def handle_existing_repo(repo: TrackedRepo, pull_existing: bool) -> SyncRepoResu
         )
 
 
+def is_branch_not_found_error(message: str) -> bool:
+    """Check if error is a branch not found error.
+
+    Args:
+        message: Error message from git.
+
+    Returns:
+        True if error indicates branch was not found.
+    """
+    lower_msg = message.lower()
+    return "remote branch" in lower_msg and "not found" in lower_msg
+
+
 def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
     """Clone a repository that doesn't exist locally.
+
+    If the specified branch doesn't exist, falls back to cloning
+    the default branch and warns about the missing branch.
 
     Args:
         repo: The tracked repository to clone.
@@ -337,6 +353,8 @@ def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
     Returns:
         SyncRepoResult with clone result.
     """
+    import shutil
+
     try:
         repo.path.parent.mkdir(parents=True, exist_ok=True)
         result = git_ops.clone_repo(repo.remote, repo.path, repo.branch)
@@ -345,12 +363,35 @@ def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
             return SyncRepoResult(
                 repo=repo,
                 action=SyncAction.CLONED,
-                message=f"Cloned from {repo.remote}",
+                message=f"Cloned ({repo.branch})",
             )
+
+        # Check if it's a branch not found error
+        error_msg = extract_git_error(result.message)
+        if is_branch_not_found_error(result.message):
+            # Clean up failed clone attempt
+            if repo.path.exists():
+                shutil.rmtree(repo.path)
+
+            # Retry without specifying branch (use default)
+            fallback_result = git_ops.clone_repo(repo.remote, repo.path, branch=None)
+            if fallback_result.success:
+                return SyncRepoResult(
+                    repo=repo,
+                    action=SyncAction.CLONED,
+                    message=f"Cloned (default branch, wanted: {repo.branch})",
+                )
+            # Fallback also failed
+            return SyncRepoResult(
+                repo=repo,
+                action=SyncAction.ERROR,
+                message=extract_git_error(fallback_result.message),
+            )
+
         return SyncRepoResult(
             repo=repo,
             action=SyncAction.ERROR,
-            message=extract_git_error(result.message),
+            message=error_msg,
         )
     except git_ops.GitError as e:
         return SyncRepoResult(
