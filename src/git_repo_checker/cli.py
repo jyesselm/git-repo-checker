@@ -107,6 +107,18 @@ def scan(
         bool,
         typer.Option("--json", help="Output results as JSON"),
     ] = False,
+    export_repos: Annotated[
+        Path | None,
+        typer.Option("--export-repos", help="Export scanned repos to a repos.yml file"),
+    ] = None,
+    merge: Annotated[
+        bool,
+        typer.Option("--merge", help="Merge with existing repos.yml instead of failing"),
+    ] = False,
+    path_prefix: Annotated[
+        str,
+        typer.Option("--path-prefix", "-p", help="Path prefix for exported repos"),
+    ] = "~",
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Verbose output"),
@@ -147,6 +159,25 @@ def scan(
     # Apply status filter if specified
     if status_filter:
         result = _filter_by_status(result, status_filter)
+
+    # Export repos if requested
+    if export_repos:
+        try:
+            added, skipped, collisions = sync_module.export_repos_to_file(
+                result.repos, export_repos, path_prefix, merge
+            )
+            console.print(f"[green]Exported to:[/] {export_repos}")
+            console.print(f"  Added: {added}, Skipped: {skipped} (no remote or already tracked)")
+            if collisions:
+                console.print(f"\n[yellow]Path collisions detected ({len(collisions)}):[/]")
+                for path, new_remote, existing_remote in collisions:
+                    console.print(f"  {path}")
+                    console.print(f"    [dim]existing:[/] {existing_remote}")
+                    console.print(f"    [dim]new (skipped):[/] {new_remote}")
+            return
+        except FileExistsError as e:
+            console.print(f"[red]Error:[/] {e}")
+            raise typer.Exit(1) from e
 
     if json_output:
         _output_json(result)

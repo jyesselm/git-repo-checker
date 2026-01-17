@@ -262,6 +262,22 @@ def has_stash(repo_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def get_remote_url(repo_path: Path, remote_name: str = "origin") -> str | None:
+    """Get the URL for a remote.
+
+    Args:
+        repo_path: Path to repository root.
+        remote_name: Name of the remote (default: origin).
+
+    Returns:
+        Remote URL if found, None otherwise.
+    """
+    result = run_git_command(repo_path, ["remote", "get-url", remote_name])
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def clone_repo(remote: str, target_path: Path, branch: str = "main") -> PullResult:
     """Clone a repository from a remote URL.
 

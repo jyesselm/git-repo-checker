@@ -7,6 +7,7 @@ import yaml
 
 from git_repo_checker import git_ops
 from git_repo_checker.models import (
+    RepoInfo,
     SyncAction,
     SyncRepoResult,
     SyncResult,
@@ -382,3 +383,124 @@ def sync_all(repos: list[TrackedRepo], pull_existing: bool = True) -> SyncResult
         skipped=skipped,
         errors=errors,
     )
+
+
+def repo_to_export_entry(repo: RepoInfo, path_prefix: Path) -> dict | None:
+    """Convert a RepoInfo to a repos.yml entry.
+
+    Args:
+        repo: RepoInfo from scan results.
+        path_prefix: Path prefix to make paths relative to.
+
+    Returns:
+        Dictionary for repos.yml entry, or None if no remote found.
+    """
+    remote = git_ops.get_remote_url(repo.path)
+    if not remote:
+        return None
+
+    # Make path relative to prefix
+    try:
+        relative_path = repo.path.relative_to(path_prefix.expanduser().resolve())
+        path_str = str(relative_path)
+    except ValueError:
+        # Path not under prefix, use absolute
+        path_str = str(repo.path)
+
+    entry = {
+        "path": path_str,
+        "remote": remote,
+    }
+
+    # Only add branch if not main
+    if repo.branch and repo.branch not in ("main", "master"):
+        entry["branch"] = repo.branch
+
+    return entry
+
+
+def export_repos_to_file(
+    repos: list[RepoInfo],
+    output_path: Path,
+    path_prefix: str = "~",
+    merge: bool = False,
+) -> tuple[int, int, list[tuple[str, str, str]]]:
+    """Export scanned repos to a repos.yml file.
+
+    Args:
+        repos: List of RepoInfo from scan results.
+        output_path: Where to write the repos file.
+        path_prefix: Path prefix for relative paths.
+        merge: If True, merge with existing file instead of overwriting.
+
+    Returns:
+        Tuple of (repos_added, repos_skipped, collisions).
+        Collisions are tuples of (path, new_remote, existing_remote).
+
+    Raises:
+        FileExistsError: If file exists and merge=False.
+    """
+    output_path = output_path.expanduser().resolve()
+    prefix_path = Path(path_prefix).expanduser().resolve()
+
+    existing_remotes: set[str] = set()
+    existing_paths: set[str] = set()
+    existing_data: dict = {"path_prefix": path_prefix, "repos": []}
+    collisions: list[tuple[str, str, str]] = []  # (path, new_remote, existing_remote)
+
+    if output_path.exists():
+        if not merge:
+            raise FileExistsError(f"Repos file already exists: {output_path}. Use --merge to add to it.")
+
+        with open(output_path) as f:
+            existing_data = yaml.safe_load(f) or {}
+
+        existing_repos = existing_data.get("repos", [])
+        existing_remotes = {r.get("remote") for r in existing_repos if r.get("remote")}
+        existing_paths = {r.get("path"): r.get("remote") for r in existing_repos if r.get("path")}
+        # Keep existing path_prefix if merging
+        if "path_prefix" not in existing_data:
+            existing_data["path_prefix"] = path_prefix
+        if "repos" not in existing_data:
+            existing_data["repos"] = []
+
+    added = 0
+    skipped = 0
+
+    for repo in repos:
+        entry = repo_to_export_entry(repo, prefix_path)
+        if entry is None:
+            skipped += 1
+            continue
+
+        # Skip if remote already tracked
+        if entry["remote"] in existing_remotes:
+            skipped += 1
+            continue
+
+        # Check for path collision (same path, different remote)
+        if entry["path"] in existing_paths:
+            collisions.append((entry["path"], entry["remote"], existing_paths[entry["path"]]))
+            skipped += 1
+            continue
+
+        existing_data["repos"].append(entry)
+        existing_remotes.add(entry["remote"])
+        existing_paths[entry["path"]] = entry["remote"]
+        added += 1
+
+    # Write output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Generate YAML with comments
+    header = """\
+# Tracked repositories for git-repo-checker sync
+# These repos will be cloned if missing, pulled if they exist
+#
+# Override path_prefix for different machines with --path-prefix or local.yml
+
+"""
+    yaml_content = yaml.dump(existing_data, default_flow_style=False, sort_keys=False)
+    output_path.write_text(header + yaml_content)
+
+    return added, skipped, collisions
