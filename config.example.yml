@@ -1,0 +1,46 @@
+# Git Repo Checker Configuration
+# Copy this file to ./git-repo-checker.yml or ~/.config/git-repo-checker/config.yml
+
+# Directories to scan for git repositories
+scan_paths:
+  - ~/code
+  - ~/projects
+
+# Glob patterns for directories to exclude from scanning
+exclude_patterns:
+  - "**/node_modules"
+  - "**/venv"
+  - "**/.venv"
+  - "**/vendor"
+  - "**/__pycache__"
+  - "**/.tox"
+
+# Specific directories to exclude (absolute paths)
+exclude_paths: []
+  # - ~/code/archived
+  # - ~/code/vendor-forks
+
+# Branch names considered "main" branches
+# Warns if you have uncommitted changes on these branches
+main_branches:
+  - main
+  - master
+
+# Auto-pull configuration
+auto_pull:
+  # Enable automatic pulling of repos behind remote
+  enabled: true
+  # Only pull if working tree is clean (no uncommitted changes)
+  require_clean: true
+  # Skip repos matching these patterns
+  skip_patterns: []
+    # - "**/experimental/*"
+
+# Output settings
+output:
+  # Show repositories with clean status
+  show_clean: true
+  # Use colors in output
+  color: true
+  # Verbosity level: quiet, normal, verbose
+  verbosity: normal
