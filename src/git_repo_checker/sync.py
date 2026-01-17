@@ -1,5 +1,6 @@
 """Sync tracked repositories across machines."""
 
+import re
 import urllib.request
 from pathlib import Path
 
@@ -444,7 +445,7 @@ def export_repos_to_file(
     prefix_path = Path(path_prefix).expanduser().resolve()
 
     existing_remotes: set[str] = set()
-    existing_paths: set[str] = set()
+    existing_paths: dict[str, str] = {}
     existing_data: dict = {"path_prefix": path_prefix, "repos": []}
     collisions: list[tuple[str, str, str]] = []  # (path, new_remote, existing_remote)
 
@@ -501,6 +502,10 @@ def export_repos_to_file(
 
 """
     yaml_content = yaml.dump(existing_data, default_flow_style=False, sort_keys=False)
+
+    # Add blank lines between repo entries for readability
+    yaml_content = re.sub(r'\n- path:', r'\n\n- path:', yaml_content)
+
     output_path.write_text(header + yaml_content)
 
     return added, skipped, collisions
