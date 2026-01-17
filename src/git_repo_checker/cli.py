@@ -7,8 +7,9 @@ import typer
 from rich.console import Console
 
 from git_repo_checker import config as config_module
+from git_repo_checker import sync as sync_module
 from git_repo_checker.analyzer import analyze_repo, scan_and_analyze
-from git_repo_checker.models import Config, OutputConfig
+from git_repo_checker.models import Config, OutputConfig, SyncAction
 from git_repo_checker.reporter import Reporter
 
 app = typer.Typer(
@@ -170,3 +171,106 @@ def check(
 
     if repo_info.warnings:
         reporter.display_warnings([repo_info])
+
+
+@app.command()
+def sync(
+    repos_path: Annotated[
+        Path | None,
+        typer.Option("-r", "--repos", help="Path to repos.yml file"),
+    ] = None,
+    init_repos: Annotated[
+        bool,
+        typer.Option("--init", help="Create a template repos.yml file"),
+    ] = False,
+    no_pull: Annotated[
+        bool,
+        typer.Option("--no-pull", help="Only clone missing repos, don't pull existing"),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("-q", "--quiet", help="Minimal output"),
+    ] = False,
+) -> None:
+    """Sync tracked repositories - clone missing, pull existing.
+
+    Uses repos.yml to define which repositories should exist locally.
+    """
+    if init_repos:
+        _init_repos_file(repos_path)
+        return
+
+    repos = _load_repos_or_exit(repos_path)
+    if not repos:
+        console.print("[yellow]No repositories defined in repos file.[/]")
+        return
+
+    console.print(f"Syncing [bold]{len(repos)}[/] tracked repositories...\n")
+    result = sync_module.sync_all(repos, pull_existing=not no_pull)
+    _display_sync_results(result, quiet)
+
+
+def _init_repos_file(repos_path: Path | None) -> None:
+    """Initialize a new repos file."""
+    output_path = repos_path or Path("./repos.yml")
+    try:
+        sync_module.create_repos_file(output_path)
+        console.print(f"[green]Created repos file:[/] {output_path}")
+        console.print("Edit this file to add repositories to track.")
+    except FileExistsError as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
+
+
+def _load_repos_or_exit(repos_path: Path | None) -> list:
+    """Load repos file or exit with error."""
+    try:
+        return sync_module.load_repos_file(repos_path)
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
+
+
+def _display_sync_results(result: sync_module.SyncResult, quiet: bool) -> None:
+    """Display sync results to console."""
+    for repo_result in result.results:
+        path_str = shorten_path(repo_result.repo.path)
+        _print_repo_result(repo_result, path_str, quiet)
+
+    if not quiet:
+        _print_sync_summary(result)
+
+
+def _print_repo_result(repo_result: sync_module.SyncRepoResult, path_str: str, quiet: bool) -> None:
+    """Print a single repo sync result."""
+    if repo_result.action == SyncAction.CLONED:
+        console.print(f"  [green]+[/] {path_str}: {repo_result.message}")
+    elif repo_result.action == SyncAction.PULLED:
+        console.print(f"  [cyan]↓[/] {path_str}: {repo_result.message}")
+    elif repo_result.action == SyncAction.ERROR:
+        console.print(f"  [red]✗[/] {path_str}: {repo_result.message}")
+    elif not quiet:
+        console.print(f"  [dim]·[/] {path_str}: {repo_result.message}")
+
+
+def _print_sync_summary(result: sync_module.SyncResult) -> None:
+    """Print sync summary."""
+    console.print("\n[bold]Summary:[/] ", end="")
+    parts = []
+    if result.cloned:
+        parts.append(f"[green]{result.cloned} cloned[/]")
+    if result.pulled:
+        parts.append(f"[cyan]{result.pulled} pulled[/]")
+    if result.skipped:
+        parts.append(f"[dim]{result.skipped} skipped[/]")
+    if result.errors:
+        parts.append(f"[red]{result.errors} errors[/]")
+    console.print(", ".join(parts) if parts else "nothing to do")
+
+
+def shorten_path(path: Path) -> str:
+    """Shorten path for display using home directory."""
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)

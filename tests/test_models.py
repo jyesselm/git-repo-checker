@@ -10,6 +10,10 @@ from git_repo_checker.models import (
     RepoInfo,
     RepoStatus,
     ScanResult,
+    SyncAction,
+    SyncRepoResult,
+    SyncResult,
+    TrackedRepo,
     WarningType,
 )
 
@@ -139,3 +143,48 @@ class TestConfig:
         )
         assert len(config.scan_paths) == 1
         assert "**/node_modules" in config.exclude_patterns
+
+
+class TestTrackedRepo:
+    def test_create_minimal(self):
+        repo = TrackedRepo(path=Path("/tmp/repo"), remote="git@github.com:u/r.git")
+        assert repo.path == Path("/tmp/repo")
+        assert repo.branch == "main"
+
+    def test_custom_branch(self):
+        repo = TrackedRepo(
+            path=Path("/tmp/repo"),
+            remote="git@github.com:u/r.git",
+            branch="develop",
+        )
+        assert repo.branch == "develop"
+
+
+class TestSyncAction:
+    def test_all_actions_exist(self):
+        expected = ["cloned", "pulled", "skipped", "error"]
+        actual = [a.value for a in SyncAction]
+        assert sorted(actual) == sorted(expected)
+
+
+class TestSyncRepoResult:
+    def test_create(self):
+        repo = TrackedRepo(path=Path("/tmp"), remote="git@github.com:u/r.git")
+        result = SyncRepoResult(repo=repo, action=SyncAction.CLONED, message="Done")
+        assert result.action == SyncAction.CLONED
+        assert result.message == "Done"
+
+
+class TestSyncResultModel:
+    def test_defaults(self):
+        result = SyncResult()
+        assert result.results == []
+        assert result.cloned == 0
+        assert result.pulled == 0
+        assert result.errors == 0
+
+    def test_with_counts(self):
+        result = SyncResult(cloned=2, pulled=1, errors=1)
+        assert result.cloned == 2
+        assert result.pulled == 1
+        assert result.errors == 1

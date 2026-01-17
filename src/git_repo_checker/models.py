@@ -91,3 +91,42 @@ class Config(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+class TrackedRepo(BaseModel):
+    """A repository to track and sync across machines."""
+
+    path: Path
+    remote: str
+    branch: str = "main"
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class SyncAction(str, Enum):
+    """Action taken during sync."""
+
+    CLONED = "cloned"
+    PULLED = "pulled"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class SyncRepoResult(BaseModel):
+    """Result of syncing a single repository."""
+
+    repo: TrackedRepo
+    action: SyncAction
+    message: str
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class SyncResult(BaseModel):
+    """Result of syncing all tracked repositories."""
+
+    results: list[SyncRepoResult] = Field(default_factory=list)
+    cloned: int = 0
+    pulled: int = 0
+    skipped: int = 0
+    errors: int = 0

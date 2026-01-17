@@ -1,0 +1,22 @@
+# Tracked repositories for git-repo-checker sync
+# Copy this to ./repos.yml or ~/.config/git-repo-checker/repos.yml
+#
+# These repos will be:
+# - Cloned if they don't exist locally
+# - Pulled if they exist and have upstream changes
+#
+# This helps keep multiple machines in sync with the same set of repos.
+
+repos:
+  # Example entries - uncomment and modify as needed:
+  #
+  # - path: ~/code/my-project
+  #   remote: git@github.com:username/my-project.git
+  #   branch: main  # optional, defaults to main
+  #
+  # - path: ~/code/another-repo
+  #   remote: https://github.com/username/another-repo.git
+  #   branch: develop
+  #
+  # - path: ~/work/company-project
+  #   remote: git@github.com:company/project.git

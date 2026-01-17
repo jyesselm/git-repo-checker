@@ -214,3 +214,33 @@ class TestPullRepoSuccess:
             assert result.success is True
             assert result.message == "Pull successful"
             assert result.files_changed == 3
+
+
+class TestCloneRepo:
+    def test_clone_success(self, tmp_path):
+        target = tmp_path / "cloned-repo"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = git_ops.clone_repo("git@github.com:u/r.git", target, "main")
+            assert result.success is True
+            assert "Cloned" in result.message
+
+    def test_clone_failure(self, tmp_path):
+        target = tmp_path / "cloned-repo"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1, stdout="", stderr="fatal: not found"
+            )
+            result = git_ops.clone_repo("git@github.com:u/r.git", target, "main")
+            assert result.success is False
+            assert "not found" in result.message
+
+    def test_clone_timeout(self, tmp_path):
+        import subprocess
+
+        target = tmp_path / "cloned-repo"
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="git", timeout=120)
+            result = git_ops.clone_repo("git@github.com:u/r.git", target, "main")
+            assert result.success is False
+            assert "timed out" in result.message

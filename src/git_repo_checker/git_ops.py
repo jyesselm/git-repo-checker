@@ -245,3 +245,48 @@ def fetch_repo(repo_path: Path) -> bool:
     """
     result = run_git_command(repo_path, ["fetch"], timeout=60)
     return result.returncode == 0
+
+
+def clone_repo(remote: str, target_path: Path, branch: str = "main") -> PullResult:
+    """Clone a repository from a remote URL.
+
+    Args:
+        remote: The remote URL to clone from.
+        target_path: Where to clone the repository.
+        branch: Branch to checkout after cloning.
+
+    Returns:
+        PullResult with success status and message.
+    """
+    import subprocess
+
+    cmd = ["git", "clone", "--branch", branch, remote, str(target_path)]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() or "Clone failed"
+            return PullResult(
+                path=target_path,
+                success=False,
+                message=error_msg,
+            )
+
+        return PullResult(
+            path=target_path,
+            success=True,
+            message=f"Cloned {branch} branch",
+        )
+    except subprocess.TimeoutExpired:
+        return PullResult(
+            path=target_path,
+            success=False,
+            message="Clone timed out after 120s",
+        )

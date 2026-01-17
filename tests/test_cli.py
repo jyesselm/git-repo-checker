@@ -6,7 +6,13 @@ import pytest
 from typer.testing import CliRunner
 
 from git_repo_checker.cli import app
-from git_repo_checker.models import ScanResult
+from git_repo_checker.models import (
+    ScanResult,
+    SyncAction,
+    SyncRepoResult,
+    SyncResult,
+    TrackedRepo,
+)
 
 runner = CliRunner()
 
@@ -109,3 +115,134 @@ class TestGetConfig:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(FileNotFoundError):
             get_config(None, verbose=False, quiet=False)
+
+
+class TestSyncCommand:
+    def test_init_creates_repos_file(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        result = runner.invoke(app, ["sync", "--init", "-r", str(repos_path)])
+        assert result.exit_code == 0
+        assert repos_path.exists()
+        assert "Created" in result.stdout
+
+    def test_init_fails_if_exists(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text("existing")
+        result = runner.invoke(app, ["sync", "--init", "-r", str(repos_path)])
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+
+    def test_sync_no_repos_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["sync"])
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+
+    def test_sync_empty_repos(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text("repos: []")
+        result = runner.invoke(app, ["sync", "-r", str(repos_path)])
+        assert result.exit_code == 0
+        assert "No repositories" in result.stdout
+
+    def test_sync_with_repos(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            f"""\
+repos:
+  - path: {tmp_path}/repo1
+    remote: git@github.com:u/r.git
+"""
+        )
+        with patch("git_repo_checker.cli.sync_module.sync_all") as mock_sync:
+            mock_sync.return_value = SyncResult(
+                results=[
+                    SyncRepoResult(
+                        repo=TrackedRepo(
+                            path=tmp_path / "repo1", remote="git@github.com:u/r.git"
+                        ),
+                        action=SyncAction.CLONED,
+                        message="Cloned",
+                    )
+                ],
+                cloned=1,
+            )
+            result = runner.invoke(app, ["sync", "-r", str(repos_path)])
+            assert result.exit_code == 0
+            assert "Syncing" in result.stdout
+
+    def test_sync_quiet_mode(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            f"""\
+repos:
+  - path: {tmp_path}/repo1
+    remote: git@github.com:u/r.git
+"""
+        )
+        with patch("git_repo_checker.cli.sync_module.sync_all") as mock_sync:
+            mock_sync.return_value = SyncResult(
+                results=[
+                    SyncRepoResult(
+                        repo=TrackedRepo(
+                            path=tmp_path / "repo1", remote="git@github.com:u/r.git"
+                        ),
+                        action=SyncAction.SKIPPED,
+                        message="Up to date",
+                    )
+                ],
+                skipped=1,
+            )
+            result = runner.invoke(app, ["sync", "-r", str(repos_path), "-q"])
+            assert result.exit_code == 0
+
+    def test_sync_shows_errors(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            f"""\
+repos:
+  - path: {tmp_path}/repo1
+    remote: git@github.com:u/r.git
+"""
+        )
+        with patch("git_repo_checker.cli.sync_module.sync_all") as mock_sync:
+            mock_sync.return_value = SyncResult(
+                results=[
+                    SyncRepoResult(
+                        repo=TrackedRepo(
+                            path=tmp_path / "repo1", remote="git@github.com:u/r.git"
+                        ),
+                        action=SyncAction.ERROR,
+                        message="Network error",
+                    )
+                ],
+                errors=1,
+            )
+            result = runner.invoke(app, ["sync", "-r", str(repos_path)])
+            assert result.exit_code == 0
+            assert "error" in result.stdout.lower()
+
+    def test_sync_shows_pulled(self, tmp_path):
+        repos_path = tmp_path / "repos.yml"
+        repos_path.write_text(
+            f"""\
+repos:
+  - path: {tmp_path}/repo1
+    remote: git@github.com:u/r.git
+"""
+        )
+        with patch("git_repo_checker.cli.sync_module.sync_all") as mock_sync:
+            mock_sync.return_value = SyncResult(
+                results=[
+                    SyncRepoResult(
+                        repo=TrackedRepo(
+                            path=tmp_path / "repo1", remote="git@github.com:u/r.git"
+                        ),
+                        action=SyncAction.PULLED,
+                        message="Pulled 3 files",
+                    )
+                ],
+                pulled=1,
+            )
+            result = runner.invoke(app, ["sync", "-r", str(repos_path)])
+            assert result.exit_code == 0
