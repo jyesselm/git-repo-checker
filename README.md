@@ -82,6 +82,13 @@ grc scan --json --status dirty --ci
 
 `grc scan` automatically appends newly-discovered repos (that have a remote) to your repos.yml on every scan.
 
+By default this is the central `~/.config/git-repo-checker/repos.yml`, regardless of which directory you run `grc scan` from. Point it elsewhere with `auto_track.repos_file` in your config:
+
+```yaml
+auto_track:
+  repos_file: ~/my-repos.yml
+```
+
 - **Disable for one run:** `grc scan --no-track`
 - **Disable globally** in your config file:
   ```yaml

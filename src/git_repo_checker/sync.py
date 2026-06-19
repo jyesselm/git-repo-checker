@@ -623,8 +623,9 @@ def auto_track_repos(
 def default_repos_target(config_target: str | None) -> Path:
     """Resolve where auto-track should write repos.yml.
 
-    Priority: explicit config target -> first existing default repos file ->
-    ~/.config/git-repo-checker/repos.yml (created on write).
+    Auto-track always uses the central ~/.config/git-repo-checker/repos.yml so
+    tracking is consistent no matter which directory ``grc scan`` is run from.
+    Set ``auto_track.repos_file`` in config to override this.
 
     Args:
         config_target: Explicit path from AutoTrackConfig.repos_file, or None.
@@ -634,7 +635,4 @@ def default_repos_target(config_target: str | None) -> Path:
     """
     if config_target:
         return Path(config_target).expanduser().resolve()
-    found = find_repos_file()
-    if found is not None:
-        return found
     return (Path.home() / ".config" / "git-repo-checker" / "repos.yml").resolve()

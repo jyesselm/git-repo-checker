@@ -525,14 +525,14 @@ class TestDefaultReposTarget:
         result = sync.default_repos_target(explicit)
         assert result == (tmp_path / "explicit.yml").resolve()
 
-    def test_falls_back_to_found_file(self, tmp_path, monkeypatch):
-        found = tmp_path / "found.yml"
-        found.write_text("repos: []")
-        monkeypatch.setattr(sync, "find_repos_file", lambda: found)
+    def test_defaults_to_central_config_dir(self):
         result = sync.default_repos_target(None)
-        assert result == found
+        assert result == (Path.home() / ".config" / "git-repo-checker" / "repos.yml").resolve()
 
-    def test_falls_back_to_config_dir(self, monkeypatch):
-        monkeypatch.setattr(sync, "find_repos_file", lambda: None)
+    def test_ignores_local_repos_file(self, tmp_path, monkeypatch):
+        # A local ./repos.yml must NOT divert auto-track from the central path.
+        local = tmp_path / "repos.yml"
+        local.write_text("repos: []")
+        monkeypatch.setattr(sync, "find_repos_file", lambda: local)
         result = sync.default_repos_target(None)
         assert result == (Path.home() / ".config" / "git-repo-checker" / "repos.yml").resolve()
