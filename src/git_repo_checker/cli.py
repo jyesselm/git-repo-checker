@@ -8,16 +8,27 @@ import typer
 from rich.console import Console
 
 from git_repo_checker import config as config_module
+from git_repo_checker import schedule as schedule_module
 from git_repo_checker import sync as sync_module
 from git_repo_checker.analyzer import analyze_repo, scan_and_analyze
-from git_repo_checker.models import CIStatus, Config, OutputConfig, RepoStatus, ScanResult, SyncAction
+from git_repo_checker.models import (
+    Config,
+    OutputConfig,
+    RepoStatus,
+    ScanResult,
+    SyncAction,
+)
 from git_repo_checker.reporter import Reporter
+from git_repo_checker.schedule import ScheduleStatus
 
 app = typer.Typer(
     name="git-repo-checker",
     help="Scan and report status of git repositories",
     no_args_is_help=False,
 )
+
+schedule_app = typer.Typer(help="Manage the background sync schedule (macOS launchd)")
+app.add_typer(schedule_app, name="schedule")
 
 console = Console()
 
@@ -41,6 +52,75 @@ def get_config(config_path: Path | None, verbose: bool, quiet: bool) -> Config:
         config.output.verbosity = "quiet"
 
     return config
+
+
+def _print_collisions(collisions: list[tuple[str, str, str]]) -> None:
+    """Print path collision details.
+
+    Args:
+        collisions: List of (path, new_remote, existing_remote) tuples.
+    """
+    if not collisions:
+        return
+    console.print(f"\n[yellow]Path collisions detected ({len(collisions)}):[/]")
+    for path, new_remote, existing_remote in collisions:
+        console.print(f"  {path}")
+        console.print(f"    [dim]existing:[/] {existing_remote}")
+        console.print(f"    [dim]new (skipped):[/] {new_remote}")
+
+
+def _auto_track(
+    result: ScanResult,
+    target: Path,
+    path_prefix: str,
+    quiet: bool,
+) -> None:
+    """Append newly-found repos to repos.yml and report additions.
+
+    Args:
+        result: Scan result containing repos to consider for tracking.
+        target: Destination repos.yml path.
+        path_prefix: Prefix used to relativize repo paths.
+        quiet: When True, suppress console output.
+    """
+    added, skipped, collisions = sync_module.auto_track_repos(result.repos, target, path_prefix)
+    if not quiet and added:
+        console.print(f"[green]Tracked {added} new repo(s) in[/] {target}")
+    _print_collisions(collisions)
+
+
+def _print_scan_errors(result: ScanResult, quiet: bool) -> None:
+    """Print scan warnings for directories that could not be read.
+
+    Args:
+        result: Scan result that may contain errors.
+        quiet: When True, suppress console output.
+    """
+    if quiet or not result.scan_errors:
+        return
+    console.print("[yellow]Scan warnings:[/]")
+    for err in result.scan_errors:
+        console.print(f"  [yellow]![/] {err}")
+
+
+def _should_auto_track(
+    export_repos: Path | None,
+    no_track: bool,
+    config: Config,
+) -> bool:
+    """Determine if auto-track should run.
+
+    Args:
+        export_repos: Explicit export path (when set, use old flow instead).
+        no_track: CLI flag that disables auto-track.
+        config: Application configuration.
+
+    Returns:
+        True if auto-track should be performed.
+    """
+    if export_repos is not None:
+        return False
+    return config.auto_track.enabled and not no_track
 
 
 @app.callback(invoke_without_command=True)
@@ -75,6 +155,7 @@ def main(
     result = scan_and_analyze(config)
     reporter = Reporter(console, config.output)
     reporter.display_results(result)
+    _print_scan_errors(result, quiet)
 
 
 @app.command()
@@ -91,13 +172,17 @@ def scan(
         bool,
         typer.Option("--no-pull", help="Disable auto-pull"),
     ] = False,
+    no_track: Annotated[
+        bool,
+        typer.Option("--no-track", help="Disable auto-tracking found repos into repos.yml"),
+    ] = False,
     warnings_only: Annotated[
         bool,
         typer.Option("--warnings-only", "-w", help="Only show repos with warnings"),
     ] = False,
     status_filter: Annotated[
         str | None,
-        typer.Option("--status", "-s", help="Filter by status (comma-separated: dirty,ahead,behind)"),
+        typer.Option("--status", "-s", help="Filter by status (e.g., dirty,ahead,behind)"),
     ] = None,
     check_ci: Annotated[
         bool,
@@ -156,32 +241,17 @@ def scan(
 
     result = scan_and_analyze(config, auto_pull=config.auto_pull.enabled, max_workers=workers)
 
-    # Check CI status if requested
     if check_ci:
         _add_ci_status(result)
 
-    # Apply status filter if specified
     if status_filter:
         result = _filter_by_status(result, status_filter)
 
-    # Export repos if requested
     if export_repos:
-        try:
-            added, skipped, collisions = sync_module.export_repos_to_file(
-                result.repos, export_repos, path_prefix, merge
-            )
-            console.print(f"[green]Exported to:[/] {export_repos}")
-            console.print(f"  Added: {added}, Skipped: {skipped} (no remote or already tracked)")
-            if collisions:
-                console.print(f"\n[yellow]Path collisions detected ({len(collisions)}):[/]")
-                for path, new_remote, existing_remote in collisions:
-                    console.print(f"  {path}")
-                    console.print(f"    [dim]existing:[/] {existing_remote}")
-                    console.print(f"    [dim]new (skipped):[/] {new_remote}")
-            return
-        except FileExistsError as e:
-            console.print(f"[red]Error:[/] {e}")
-            raise typer.Exit(1) from e
+        _run_export_repos(result, export_repos, path_prefix, merge)
+        return
+
+    _maybe_auto_track(result, config, no_track, path_prefix, json_output, quiet)
 
     if json_output:
         _output_json(result)
@@ -189,6 +259,61 @@ def scan(
 
     reporter = Reporter(console, config.output)
     reporter.display_results(result, show_ci=check_ci)
+    _print_scan_errors(result, quiet)
+
+
+def _maybe_auto_track(
+    result: ScanResult,
+    config: Config,
+    no_track: bool,
+    path_prefix: str,
+    json_output: bool,
+    quiet: bool,
+) -> None:
+    """Run auto-track when conditions are met.
+
+    Args:
+        result: Scan result with repos to potentially track.
+        config: Application configuration.
+        no_track: CLI flag that disables auto-track.
+        path_prefix: CLI path prefix (default "~").
+        json_output: When True, suppress all console output.
+        quiet: When True, suppress non-essential output.
+    """
+    if not result.repos or not _should_auto_track(None, no_track, config):
+        return
+    effective_prefix = path_prefix if path_prefix != "~" else config.auto_track.path_prefix
+    target = sync_module.default_repos_target(config.auto_track.repos_file)
+    if json_output:
+        sync_module.auto_track_repos(result.repos, target, effective_prefix)
+    else:
+        _auto_track(result, target, effective_prefix, quiet)
+
+
+def _run_export_repos(
+    result: ScanResult,
+    export_repos: Path,
+    path_prefix: str,
+    merge: bool,
+) -> None:
+    """Execute the --export-repos flow and print results.
+
+    Args:
+        result: Scan result whose repos to export.
+        export_repos: Destination file path.
+        path_prefix: Prefix for relative paths.
+        merge: Whether to merge with an existing file.
+    """
+    try:
+        added, skipped, collisions = sync_module.export_repos_to_file(
+            result.repos, export_repos, path_prefix, merge
+        )
+        console.print(f"[green]Exported to:[/] {export_repos}")
+        console.print(f"  Added: {added}, Skipped: {skipped} (no remote or already tracked)")
+        _print_collisions(collisions)
+    except FileExistsError as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -298,8 +423,96 @@ def sync(
     _display_sync_results(result, quiet)
 
 
+def _interval_to_seconds(interval: int, unit: str) -> int:
+    """Convert an interval + unit pair to seconds.
+
+    Args:
+        interval: Numeric interval value.
+        unit: Time unit string ("minutes" or "seconds").
+
+    Returns:
+        Interval expressed in seconds.
+
+    Raises:
+        typer.BadParameter: If the unit is unrecognised or interval < 1.
+    """
+    if interval < 1:
+        raise typer.BadParameter("Interval must be >= 1")
+    if unit == "minutes":
+        return interval * 60
+    if unit == "seconds":
+        return interval
+    raise typer.BadParameter(f"Unknown unit '{unit}'. Use 'minutes' or 'seconds'.")
+
+
+@schedule_app.command("install")
+def schedule_install(
+    interval: Annotated[
+        int,
+        typer.Option("--interval", "-i", help="Run interval"),
+    ] = 60,
+    unit: Annotated[
+        str,
+        typer.Option("--unit", help="Interval unit: minutes or seconds"),
+    ] = "minutes",
+    repos_path: Annotated[
+        Path | None,
+        typer.Option("-r", "--repos", help="repos.yml to pass to sync"),
+    ] = None,
+) -> None:
+    """Install a launchd agent that runs grc sync on a schedule."""
+    try:
+        seconds = _interval_to_seconds(interval, unit)
+    except typer.BadParameter as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
+
+    extra_args = ["--repos", str(repos_path)] if repos_path else []
+    try:
+        plist = schedule_module.install(seconds, extra_args)
+        console.print(f"[green]Installed sync schedule[/] (every {interval} {unit}) -> {plist}")
+    except (RuntimeError, ValueError) as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall() -> None:
+    """Remove the launchd sync agent."""
+    try:
+        removed = schedule_module.uninstall()
+    except RuntimeError as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1) from e
+
+    if removed:
+        console.print("[green]Removed sync schedule.[/]")
+    else:
+        console.print("[dim]Nothing installed.[/]")
+
+
+@schedule_app.command("status")
+def schedule_status() -> None:
+    """Show the status of the launchd sync agent."""
+    status: ScheduleStatus = schedule_module.get_status()
+    if not status.installed:
+        console.print("[dim]Sync schedule not installed.[/]")
+        console.print("Run [bold]grc schedule install[/] to set one up.")
+        return
+
+    loaded_str = "[green]loaded[/]" if status.loaded else "[red]not loaded[/]"
+    console.print(f"[bold]Sync schedule[/]: {loaded_str}")
+    console.print(f"  Interval : {status.interval_seconds}s")
+    console.print(f"  Plist    : {status.plist_path}")
+    console.print(f"  Command  : {' '.join(status.program_args)}")
+
+
 def _init_repos_file(repos_path: Path | None) -> None:
-    """Initialize a new repos file."""
+    """Initialize a new repos file.
+
+    Args:
+        repos_path: Optional target path; defaults to ./repos.yml.
+    """
     output_path = repos_path or Path("./repos.yml")
     try:
         sync_module.create_repos_file(output_path)
@@ -311,7 +524,15 @@ def _init_repos_file(repos_path: Path | None) -> None:
 
 
 def _load_repos_or_exit(repos_path: Path | None, path_prefix: str | None = None) -> list:
-    """Load repos file or exit with error."""
+    """Load repos file or exit with error.
+
+    Args:
+        repos_path: Optional explicit path to repos.yml.
+        path_prefix: Optional path prefix override.
+
+    Returns:
+        List of TrackedRepo objects.
+    """
     try:
         return sync_module.load_repos_file(repos_path, path_prefix)
     except FileNotFoundError as e:
@@ -320,7 +541,14 @@ def _load_repos_or_exit(repos_path: Path | None, path_prefix: str | None = None)
 
 
 def _fetch_repos_from_url(url: str) -> Path:
-    """Fetch repos file from URL and return local path."""
+    """Fetch repos file from URL and return local path.
+
+    Args:
+        url: URL to fetch repos.yml from.
+
+    Returns:
+        Local path where the file was saved.
+    """
     from urllib.error import URLError
 
     try:
@@ -334,7 +562,12 @@ def _fetch_repos_from_url(url: str) -> Path:
 
 
 def _display_sync_results(result: sync_module.SyncResult, quiet: bool) -> None:
-    """Display sync results to console."""
+    """Display sync results to console.
+
+    Args:
+        result: Sync result to display.
+        quiet: When True, suppress skipped entries and summary.
+    """
     for repo_result in result.results:
         path_str = shorten_path(repo_result.repo.path)
         _print_repo_result(repo_result, path_str, quiet)
@@ -344,7 +577,13 @@ def _display_sync_results(result: sync_module.SyncResult, quiet: bool) -> None:
 
 
 def _print_repo_result(repo_result: sync_module.SyncRepoResult, path_str: str, quiet: bool) -> None:
-    """Print a single repo sync result."""
+    """Print a single repo sync result.
+
+    Args:
+        repo_result: The sync result for one repo.
+        path_str: Display path string.
+        quiet: When True, skip non-notable results.
+    """
     if repo_result.action == SyncAction.CLONED:
         console.print(f"  [green]+[/] {path_str}: {repo_result.message}")
     elif repo_result.action == SyncAction.PULLED:
@@ -356,7 +595,11 @@ def _print_repo_result(repo_result: sync_module.SyncRepoResult, path_str: str, q
 
 
 def _print_sync_summary(result: sync_module.SyncResult) -> None:
-    """Print sync summary."""
+    """Print sync summary line.
+
+    Args:
+        result: Sync result to summarize.
+    """
     console.print("\n[bold]Summary:[/] ", end="")
     parts = []
     if result.cloned:
@@ -371,7 +614,14 @@ def _print_sync_summary(result: sync_module.SyncResult) -> None:
 
 
 def shorten_path(path: Path) -> str:
-    """Shorten path for display using home directory."""
+    """Shorten path for display using home directory.
+
+    Args:
+        path: Absolute path to shorten.
+
+    Returns:
+        Path string shortened relative to home, or absolute.
+    """
     try:
         return "~/" + str(path.relative_to(Path.home()))
     except ValueError:
@@ -407,7 +657,6 @@ def _filter_by_status(result: ScanResult, status_filter: str) -> ScanResult:
     statuses = {s.strip().lower() for s in status_filter.split(",")}
     valid_statuses = {s.value for s in RepoStatus}
 
-    # Validate status values
     invalid = statuses - valid_statuses
     if invalid:
         console.print(f"[yellow]Warning: Unknown status values: {', '.join(invalid)}[/]")
@@ -429,7 +678,6 @@ def _output_json(result: ScanResult) -> None:
     Args:
         result: The scan result to output.
     """
-    # Convert to dict with string paths for JSON serialization
     output = {
         "total_scanned": result.total_scanned,
         "repos": [
@@ -487,6 +735,23 @@ def _display_sync_dry_run(repos: list, pull_existing: bool) -> None:
         else:
             would_skip.append((path_str, "exists, no-pull mode"))
 
+    _print_dry_run_sections(would_clone, would_pull, would_skip)
+    console.print(f"\n[bold]Summary:[/] {len(would_clone)} to clone, ", end="")
+    console.print(f"{len(would_pull)} to check, {len(would_skip)} to skip")
+
+
+def _print_dry_run_sections(
+    would_clone: list,
+    would_pull: list,
+    would_skip: list,
+) -> None:
+    """Print the clone/pull/skip sections for dry run output.
+
+    Args:
+        would_clone: Repos that would be cloned.
+        would_pull: Repos that would be pulled.
+        would_skip: Repos that would be skipped.
+    """
     if would_clone:
         console.print("[green]Would clone:[/]")
         for path, remote in would_clone:
@@ -501,6 +766,3 @@ def _display_sync_dry_run(repos: list, pull_existing: bool) -> None:
         console.print("[dim]Would skip:[/]")
         for path, reason in would_skip:
             console.print(f"  · {path}: {reason}")
-
-    console.print(f"\n[bold]Summary:[/] {len(would_clone)} to clone, ", end="")
-    console.print(f"{len(would_pull)} to check, {len(would_skip)} to skip")

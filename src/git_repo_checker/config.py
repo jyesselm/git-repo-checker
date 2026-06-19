@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from git_repo_checker.models import AutoPullConfig, Config, OutputConfig
+from git_repo_checker.models import AutoPullConfig, AutoTrackConfig, Config, OutputConfig
 
 DEFAULT_CONFIG_LOCATIONS = [
     Path("./git-repo-checker.yml"),
@@ -40,6 +40,12 @@ auto_pull:
   enabled: true
   require_clean: true
   skip_patterns: []
+
+# Auto-track: append newly-found repos (with a remote) to repos.yml during scan
+auto_track:
+  enabled: true
+  # repos_file: ~/.config/git-repo-checker/repos.yml  # optional explicit target
+  path_prefix: ~
 
 # Output settings
 output:
@@ -121,6 +127,7 @@ def parse_raw_config(raw: dict) -> Config:
         Config object with nested models populated.
     """
     auto_pull_raw = raw.get("auto_pull", {})
+    auto_track_raw = raw.get("auto_track", {})
     output_raw = raw.get("output", {})
 
     return Config(
@@ -129,6 +136,7 @@ def parse_raw_config(raw: dict) -> Config:
         exclude_paths=[Path(p) for p in raw.get("exclude_paths", [])],
         main_branches=raw.get("main_branches", ["main", "master"]),
         auto_pull=AutoPullConfig(**auto_pull_raw),
+        auto_track=AutoTrackConfig(**auto_track_raw),
         output=OutputConfig(**output_raw),
     )
 
@@ -148,6 +156,7 @@ def expand_paths(config: Config) -> Config:
         exclude_paths=[p.expanduser().resolve() for p in config.exclude_paths],
         main_branches=config.main_branches,
         auto_pull=config.auto_pull,
+        auto_track=config.auto_track,
         output=config.output,
     )
 

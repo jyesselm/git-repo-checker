@@ -85,6 +85,17 @@ class TestParseRawConfig:
         assert config.auto_pull.enabled is False
         assert config.output.verbosity == "quiet"
 
+    def test_loads_auto_track_defaults(self):
+        raw = {}
+        config = config_module.parse_raw_config(raw)
+        assert config.auto_track.enabled is True
+        assert config.auto_track.repos_file is None
+
+    def test_parses_auto_track_disabled(self):
+        raw = {"auto_track": {"enabled": False}}
+        config = config_module.parse_raw_config(raw)
+        assert config.auto_track.enabled is False
+
 
 class TestExpandPaths:
     def test_expands_home_directory(self):

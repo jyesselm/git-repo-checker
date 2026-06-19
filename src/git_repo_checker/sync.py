@@ -23,6 +23,8 @@ DEFAULT_REPOS_LOCATIONS = [
     Path.home() / ".config" / "git-repo-checker" / "repos.yaml",
 ]
 
+IGNORE_MARKER = ".grcignore"  # presence in a repo root opts it out of auto-track
+
 REPOS_TEMPLATE = """\
 # Tracked repositories for git-repo-checker sync
 # These repos will be cloned if missing, pulled if they exist
@@ -249,7 +251,7 @@ def extract_git_error(message: str) -> str:
         if line.startswith("error:"):
             return line[6:].strip()
     # No fatal/error found, return last non-empty line
-    lines = [l.strip() for l in message.split("\n") if l.strip()]
+    lines = [ln.strip() for ln in message.split("\n") if ln.strip()]
     return lines[-1] if lines else message
 
 
@@ -268,7 +270,7 @@ def sync_repo(repo: TrackedRepo, pull_existing: bool = True) -> SyncRepoResult:
     if repo.path.exists():
         return handle_existing_repo(repo, pull_existing)
 
-    return clone_repo(repo)
+    return clone_tracked_repo(repo)
 
 
 def handle_existing_repo(repo: TrackedRepo, pull_existing: bool) -> SyncRepoResult:
@@ -341,7 +343,7 @@ def is_branch_not_found_error(message: str) -> bool:
     return "remote branch" in lower_msg and "not found" in lower_msg
 
 
-def clone_repo(repo: TrackedRepo) -> SyncRepoResult:
+def clone_tracked_repo(repo: TrackedRepo) -> SyncRepoResult:
     """Clone a repository that doesn't exist locally.
 
     If the specified branch doesn't exist, falls back to cloning
@@ -439,8 +441,7 @@ def sync_all(
     # Sync active repos in parallel
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_repo = {
-            executor.submit(sync_repo, repo, pull_existing): repo
-            for repo in active_repos
+            executor.submit(sync_repo, repo, pull_existing): repo for repo in active_repos
         }
 
         for future in as_completed(future_to_repo):
@@ -476,8 +477,11 @@ def repo_to_export_entry(repo: RepoInfo, path_prefix: Path) -> dict | None:
         path_prefix: Path prefix to make paths relative to.
 
     Returns:
-        Dictionary for repos.yml entry, or None if no remote found.
+        Dictionary for repos.yml entry, or None if no remote or opted out.
     """
+    if (repo.path / IGNORE_MARKER).exists():
+        return None
+
     remote = git_ops.get_remote_url(repo.path)
     if not remote:
         return None
@@ -533,7 +537,9 @@ def export_repos_to_file(
 
     if output_path.exists():
         if not merge:
-            raise FileExistsError(f"Repos file already exists: {output_path}. Use --merge to add to it.")
+            raise FileExistsError(
+                f"Repos file already exists: {output_path}. Use --merge to add to it."
+            )
 
         with open(output_path) as f:
             existing_data = yaml.safe_load(f) or {}
@@ -586,8 +592,49 @@ def export_repos_to_file(
     yaml_content = yaml.dump(existing_data, default_flow_style=False, sort_keys=False)
 
     # Add blank lines between repo entries for readability
-    yaml_content = re.sub(r'\n- path:', r'\n\n- path:', yaml_content)
+    yaml_content = re.sub(r"\n- path:", r"\n\n- path:", yaml_content)
 
     output_path.write_text(header + yaml_content)
 
     return added, skipped, collisions
+
+
+def auto_track_repos(
+    repos: list[RepoInfo],
+    target: Path,
+    path_prefix: str = "~",
+) -> tuple[int, int, list[tuple[str, str, str]]]:
+    """Append newly-found repos to a repos.yml, merging safely.
+
+    Creates the file if missing; merges (never overwrites) if present.
+    Skips repos without a remote and those already tracked.
+
+    Args:
+        repos: Scanned repos to consider for tracking.
+        target: repos.yml path to update.
+        path_prefix: Prefix used to relativize repo paths.
+
+    Returns:
+        Tuple of (added, skipped, collisions) — same shape as export_repos_to_file.
+    """
+    return export_repos_to_file(repos, target, path_prefix, merge=True)
+
+
+def default_repos_target(config_target: str | None) -> Path:
+    """Resolve where auto-track should write repos.yml.
+
+    Priority: explicit config target -> first existing default repos file ->
+    ~/.config/git-repo-checker/repos.yml (created on write).
+
+    Args:
+        config_target: Explicit path from AutoTrackConfig.repos_file, or None.
+
+    Returns:
+        Absolute path to the repos.yml to update.
+    """
+    if config_target:
+        return Path(config_target).expanduser().resolve()
+    found = find_repos_file()
+    if found is not None:
+        return found
+    return (Path.home() / ".config" / "git-repo-checker" / "repos.yml").resolve()

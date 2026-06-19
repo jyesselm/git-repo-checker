@@ -5,8 +5,10 @@ A CLI tool to scan, monitor, and sync git repositories across your system.
 ## Features
 
 - **Scan directories** for git repositories and report their status
+- **Auto-track** newly-found repos into repos.yml during scan (opt out with `--no-track`)
 - **Auto-pull** clean repos that are behind their remote
 - **Sync repositories** across machines from a central repos.yml file
+- **Background sync** via macOS launchd (`grc schedule install`)
 - **GitHub Actions CI status** integration
 - **JSON output** for scripting and CI pipelines
 - **Stash detection** to warn about forgotten stashed changes
@@ -67,12 +69,29 @@ grc scan --json --status dirty --ci
 |------|-------------|
 | `-c, --config PATH` | Path to config file |
 | `--no-pull` | Disable auto-pull for repos behind remote |
+| `--no-track` | Disable auto-tracking found repos into repos.yml |
 | `-w, --warnings-only` | Only show repos with warnings |
 | `-s, --status STATUS` | Filter by status (comma-separated: dirty,ahead,behind,clean,diverged,no_remote,error,untracked) |
 | `--ci` | Check GitHub Actions CI status (requires `gh` CLI) |
 | `--json` | Output results as JSON |
+| `--export-repos PATH` | Explicit target repos.yml (back-compat alias for auto-track) |
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Minimal output |
+
+#### Auto-track
+
+`grc scan` automatically appends newly-discovered repos (that have a remote) to your repos.yml on every scan.
+
+- **Disable for one run:** `grc scan --no-track`
+- **Disable globally** in your config file:
+  ```yaml
+  auto_track:
+    enabled: false
+  ```
+- **Opt out per-repo:** place an empty `.grcignore` file in the repository root. The repo still appears in `grc scan` output — it just won't be added to repos.yml.
+  ```bash
+  touch /path/to/my-private-repo/.grcignore
+  ```
 
 ### `grc sync` - Sync Repositories
 
@@ -111,6 +130,30 @@ grc sync --no-pull
 | `--no-pull` | Only clone missing repos, don't pull |
 | `-n, --dry-run` | Show what would be done without executing |
 | `-q, --quiet` | Minimal output |
+
+### `grc schedule` - Background Sync (macOS)
+
+Manage a launchd LaunchAgent that runs `grc sync` on a schedule.
+
+```bash
+# Install: run every 60 minutes (default)
+grc schedule install
+
+# Custom interval
+grc schedule install --interval 30 --unit minutes
+grc schedule install --interval 300 --unit seconds
+
+# Use a specific repos file
+grc schedule install --repos ~/my-repos.yml
+
+# Check status
+grc schedule status
+
+# Remove the schedule
+grc schedule uninstall
+```
+
+The agent plist is written to `~/Library/LaunchAgents/com.git-repo-checker.sync.plist` and logs are written to `~/Library/Logs/git-repo-checker-sync.{out,err}.log`.
 
 ### `grc check` - Check Single Repository
 
@@ -161,6 +204,12 @@ auto_pull:
   require_clean: true  # Only pull if working tree is clean
   skip_patterns:
     - "**/work-in-progress"
+
+# Auto-track: append newly-found repos (with a remote) to repos.yml during scan
+auto_track:
+  enabled: true
+  # repos_file: ~/.config/git-repo-checker/repos.yml  # optional explicit target
+  path_prefix: ~
 
 # Output settings
 output:

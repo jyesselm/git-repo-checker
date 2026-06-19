@@ -175,21 +175,18 @@ def scan_and_analyze(
     """
     repos: list[RepoInfo] = []
     pull_results: list[PullResult] = []
-    scan_errors: list[str] = []
 
-    repo_paths = list(
-        scanner.find_git_repos(
-            scan_paths=config.scan_paths,
-            exclude_patterns=config.exclude_patterns,
-            exclude_paths=config.exclude_paths,
-        )
+    walk = scanner.walk_git_repos(
+        scan_paths=config.scan_paths,
+        exclude_patterns=config.exclude_patterns,
+        exclude_paths=config.exclude_paths,
     )
+    scan_errors = walk.errors
 
     # Analyze repos in parallel
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_path = {
-            executor.submit(analyze_repo, repo_path, config): repo_path
-            for repo_path in repo_paths
+            executor.submit(analyze_repo, repo_path, config): repo_path for repo_path in walk.repos
         }
 
         for future in as_completed(future_to_path):

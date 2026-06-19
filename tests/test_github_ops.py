@@ -1,9 +1,6 @@
 """Tests for github_ops module."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from git_repo_checker import github_ops
 from git_repo_checker.models import CIStatus

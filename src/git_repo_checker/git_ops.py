@@ -278,9 +278,7 @@ def get_remote_url(repo_path: Path, remote_name: str = "origin") -> str | None:
     return result.stdout.strip()
 
 
-def clone_repo(
-    remote: str, target_path: Path, branch: str | None = "main"
-) -> PullResult:
+def clone_repo(remote: str, target_path: Path, branch: str | None = "main") -> PullResult:
     """Clone a repository from a remote URL.
 
     Args:

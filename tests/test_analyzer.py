@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from git_repo_checker import analyzer
+from git_repo_checker import analyzer, scanner
 from git_repo_checker.models import (
     AutoPullConfig,
     Config,
@@ -10,6 +10,7 @@ from git_repo_checker.models import (
     RepoStatus,
     WarningType,
 )
+from git_repo_checker.scanner import ScanWalkResult
 
 
 class TestAnalyzeRepo:
@@ -182,3 +183,9 @@ class TestScanAndAnalyze:
 
         # No pull results because auto_pull=False was passed
         assert result.pull_results == []
+
+    def test_scan_errors_propagated(self, sample_config, monkeypatch):
+        walk_result = ScanWalkResult(repos=[], errors=["Permission denied: /x"])
+        monkeypatch.setattr(scanner, "walk_git_repos", lambda **kw: walk_result)
+        result = analyzer.scan_and_analyze(sample_config, auto_pull=False)
+        assert result.scan_errors == ["Permission denied: /x"]

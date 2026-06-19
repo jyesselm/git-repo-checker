@@ -4,6 +4,7 @@ from pathlib import Path
 
 from git_repo_checker.models import (
     AutoPullConfig,
+    AutoTrackConfig,
     CIStatus,
     Config,
     OutputConfig,
@@ -136,6 +137,20 @@ class TestAutoPullConfig:
         config = AutoPullConfig(enabled=False, skip_patterns=["**/test"])
         assert config.enabled is False
         assert "**/test" in config.skip_patterns
+
+
+class TestAutoTrackConfig:
+    def test_defaults(self):
+        config = AutoTrackConfig()
+        assert config.enabled is True
+        assert config.repos_file is None
+        assert config.path_prefix == "~"
+
+    def test_custom_values(self):
+        config = AutoTrackConfig(enabled=False, repos_file="/tmp/repos.yml", path_prefix="~/code")
+        assert config.enabled is False
+        assert config.repos_file == "/tmp/repos.yml"
+        assert config.path_prefix == "~/code"
 
 
 class TestOutputConfig:

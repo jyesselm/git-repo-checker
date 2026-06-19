@@ -85,6 +85,14 @@ class AutoPullConfig(BaseModel):
     skip_patterns: list[str] = Field(default_factory=list)
 
 
+class AutoTrackConfig(BaseModel):
+    """Configuration for automatic repo tracking during scan."""
+
+    enabled: bool = True
+    repos_file: str | None = None
+    path_prefix: str = "~"
+
+
 class OutputConfig(BaseModel):
     """Configuration for output formatting."""
 
@@ -101,6 +109,7 @@ class Config(BaseModel):
     exclude_paths: list[Path] = Field(default_factory=list)
     main_branches: list[str] = Field(default_factory=lambda: ["main", "master"])
     auto_pull: AutoPullConfig = Field(default_factory=AutoPullConfig)
+    auto_track: AutoTrackConfig = Field(default_factory=AutoTrackConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
     model_config = {"arbitrary_types_allowed": True}

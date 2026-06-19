@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from git_repo_checker import sync
-from git_repo_checker.models import PullResult, SyncAction, TrackedRepo
+from git_repo_checker.models import PullResult, RepoInfo, RepoStatus, SyncAction, TrackedRepo
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ class TestCreateReposFile:
 
 class TestSyncRepo:
     def test_clones_missing_repo(self, tracked_repo):
-        with patch.object(sync, "clone_repo") as mock_clone:
+        with patch.object(sync, "clone_tracked_repo") as mock_clone:
             mock_clone.return_value = sync.SyncRepoResult(
                 repo=tracked_repo,
                 action=SyncAction.CLONED,
@@ -209,7 +209,7 @@ class TestHandleExistingRepo:
             assert "up to date" in result.message
 
 
-class TestCloneRepo:
+class TestCloneTrackedRepo:
     def test_clones_successfully(self, tracked_repo):
         with patch("git_repo_checker.sync.git_ops") as mock_git:
             mock_git.clone_repo.return_value = PullResult(
@@ -217,7 +217,7 @@ class TestCloneRepo:
                 success=True,
                 message="Cloned main branch",
             )
-            result = sync.clone_repo(tracked_repo)
+            result = sync.clone_tracked_repo(tracked_repo)
             assert result.action == SyncAction.CLONED
 
     def test_handles_clone_failure(self, tracked_repo):
@@ -227,7 +227,7 @@ class TestCloneRepo:
                 success=False,
                 message="Network error",
             )
-            result = sync.clone_repo(tracked_repo)
+            result = sync.clone_tracked_repo(tracked_repo)
             assert result.action == SyncAction.ERROR
             assert "Network error" in result.message
 
@@ -421,3 +421,118 @@ class TestFetchReposFromUrl:
 
             assert result == output_path
             assert output_path.exists()
+
+
+def _make_repo_info(path: Path) -> RepoInfo:
+    return RepoInfo(path=path, branch="main", status=RepoStatus.CLEAN)
+
+
+class TestRepoToExportEntry:
+    def test_grcignore_marker_skips_repo(self, tmp_path):
+        repo_dir = tmp_path / "my-repo"
+        repo_dir.mkdir()
+        (repo_dir / sync.IGNORE_MARKER).touch()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = "git@github.com:u/r.git"
+            result = sync.repo_to_export_entry(repo, tmp_path)
+
+        assert result is None
+        mock_remote.assert_not_called()
+
+
+class TestAutoTrackRepos:
+    def test_creates_file_when_missing(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        repo_dir = tmp_path / "my-repo"
+        repo_dir.mkdir()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = "git@github.com:u/r.git"
+            added, skipped, collisions = sync.auto_track_repos(
+                [repo], target, path_prefix=str(tmp_path)
+            )
+
+        assert target.exists()
+        assert added == 1
+        assert skipped == 0
+
+    def test_merges_into_existing(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        target.write_text(
+            "path_prefix: ~\nrepos:\n  - path: old-repo\n    remote: git@github.com:u/old.git\n"
+        )
+        repo_dir = tmp_path / "new-repo"
+        repo_dir.mkdir()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = "git@github.com:u/new.git"
+            added, _skipped, _col = sync.auto_track_repos([repo], target, path_prefix=str(tmp_path))
+
+        assert added == 1
+        content = target.read_text()
+        assert "old-repo" in content
+        assert "new-repo" in content
+
+    def test_skips_repo_without_remote(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        repo_dir = tmp_path / "local-repo"
+        repo_dir.mkdir()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = None
+            added, skipped, _col = sync.auto_track_repos([repo], target, path_prefix=str(tmp_path))
+
+        assert added == 0
+        assert skipped == 1
+
+    def test_grcignore_marker_skips_repo(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        repo_dir = tmp_path / "ignored-repo"
+        repo_dir.mkdir()
+        (repo_dir / sync.IGNORE_MARKER).touch()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = "git@github.com:u/r.git"
+            added, skipped, _col = sync.auto_track_repos([repo], target, path_prefix=str(tmp_path))
+
+        assert added == 0
+        assert skipped == 1
+        mock_remote.assert_not_called()
+
+    def test_never_raises_on_existing_file(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        target.write_text("path_prefix: ~\nrepos: []\n")
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        repo = _make_repo_info(repo_dir)
+
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = "git@github.com:u/r.git"
+            # Must not raise FileExistsError
+            added, _s, _c = sync.auto_track_repos([repo], target, path_prefix=str(tmp_path))
+        assert added == 1
+
+
+class TestDefaultReposTarget:
+    def test_uses_explicit_config_target(self, tmp_path):
+        explicit = str(tmp_path / "explicit.yml")
+        result = sync.default_repos_target(explicit)
+        assert result == (tmp_path / "explicit.yml").resolve()
+
+    def test_falls_back_to_found_file(self, tmp_path, monkeypatch):
+        found = tmp_path / "found.yml"
+        found.write_text("repos: []")
+        monkeypatch.setattr(sync, "find_repos_file", lambda: found)
+        result = sync.default_repos_target(None)
+        assert result == found
+
+    def test_falls_back_to_config_dir(self, monkeypatch):
+        monkeypatch.setattr(sync, "find_repos_file", lambda: None)
+        result = sync.default_repos_target(None)
+        assert result == (Path.home() / ".config" / "git-repo-checker" / "repos.yml").resolve()

@@ -1,8 +1,67 @@
 """Tests for scanner module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 from git_repo_checker import scanner
+from git_repo_checker.scanner import ScanWalkResult
+
+
+class TestWalkGitRepos:
+    def test_finds_repos_returns_walkresult(self, nested_repos):
+        walk = scanner.walk_git_repos(
+            scan_paths=[nested_repos],
+            exclude_patterns=["**/node_modules"],
+            exclude_paths=[],
+        )
+        assert isinstance(walk, ScanWalkResult)
+        repo_names = [r.name for r in walk.repos]
+        assert "repo1" in repo_names
+        assert "repo2" in repo_names
+        assert "repo3" in repo_names
+        assert walk.errors == []
+
+    def test_records_permission_error(self, tmp_path):
+        # Create a subdir to trigger permission error during iterdir
+        blocked = tmp_path / "blocked"
+        blocked.mkdir()
+
+        original_iterdir = Path.iterdir
+
+        def patched_iterdir(self):
+            if self == blocked:
+                raise PermissionError("Access denied")
+            return original_iterdir(self)
+
+        with patch.object(Path, "iterdir", patched_iterdir):
+            walk = scanner.walk_git_repos(
+                scan_paths=[tmp_path],
+                exclude_patterns=[],
+                exclude_paths=[],
+            )
+
+        assert len(walk.errors) >= 1
+        assert any("Permission denied" in e for e in walk.errors)
+
+    def test_records_oserror(self, tmp_path):
+        bad = tmp_path / "bad"
+        bad.mkdir()
+        original_iterdir = Path.iterdir
+
+        def patched_iterdir(self):
+            if self == bad:
+                raise OSError("I/O error")
+            return original_iterdir(self)
+
+        with patch.object(Path, "iterdir", patched_iterdir):
+            walk = scanner.walk_git_repos(
+                scan_paths=[bad],
+                exclude_patterns=[],
+                exclude_paths=[],
+            )
+
+        assert len(walk.errors) >= 1
+        assert any("Cannot scan" in e for e in walk.errors)
 
 
 class TestFindGitRepos:

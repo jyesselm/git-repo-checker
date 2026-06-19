@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -17,8 +17,20 @@ from git_repo_checker.models import (
     SyncResult,
     TrackedRepo,
 )
+from git_repo_checker.schedule import ScheduleStatus
 
 runner = CliRunner()
+
+# Patch target for auto_track_repos to prevent file writes in tests
+_AUTO_TRACK = "git_repo_checker.cli.sync_module.auto_track_repos"
+_NO_OP_TRACK = (_AUTO_TRACK, MagicMock(return_value=(0, 0, [])))
+
+
+def _scan_result_with_repos(tmp_path: Path) -> ScanResult:
+    return ScanResult(
+        repos=[RepoInfo(path=tmp_path / "repo1", branch="main", status=RepoStatus.CLEAN)],
+        total_scanned=1,
+    )
 
 
 class TestMainCommand:
@@ -38,11 +50,11 @@ class TestMainCommand:
 
 class TestScanCommand:
     def test_scan_with_paths(self, temp_git_repo, sample_config_yaml):
-        result = runner.invoke(
-            app,
-            ["scan", str(temp_git_repo.parent), "--config", str(sample_config_yaml)],
-        )
-        # Should complete without error
+        with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+            result = runner.invoke(
+                app,
+                ["scan", str(temp_git_repo.parent), "--config", str(sample_config_yaml)],
+            )
         assert result.exit_code == 0
 
     def test_scan_no_pull_flag(self, sample_config_yaml, tmp_path, monkeypatch):
@@ -54,7 +66,6 @@ class TestScanCommand:
                 ["scan", "--no-pull", "--config", str(sample_config_yaml)],
             )
             assert result.exit_code == 0
-            # Check that auto_pull was disabled
             call_args = mock_scan.call_args
             assert call_args[1]["auto_pull"] is False
 
@@ -138,7 +149,6 @@ class TestSyncCommand:
 
     def test_sync_no_repos_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        # Mock DEFAULT_REPOS_LOCATIONS to only check current dir (not ~/.config)
         with patch("git_repo_checker.sync.DEFAULT_REPOS_LOCATIONS", [Path("./repos.yml")]):
             result = runner.invoke(app, ["sync"])
         assert result.exit_code == 1
@@ -263,25 +273,17 @@ repos:
 class TestScanJsonOutput:
     def test_json_output_flag(self, sample_config_yaml, tmp_path):
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
-            mock_scan.return_value = ScanResult(
-                repos=[
-                    RepoInfo(
-                        path=tmp_path / "repo1",
-                        branch="main",
-                        status=RepoStatus.CLEAN,
-                    )
-                ],
-                total_scanned=1,
-            )
-            result = runner.invoke(
-                app,
-                ["scan", "--json", "--config", str(sample_config_yaml)],
-            )
-            assert result.exit_code == 0
-            data = json.loads(result.stdout)
-            assert data["total_scanned"] == 1
-            assert len(data["repos"]) == 1
-            assert data["repos"][0]["status"] == "clean"
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--json", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["total_scanned"] == 1
+        assert len(data["repos"]) == 1
+        assert data["repos"][0]["status"] == "clean"
 
     def test_json_includes_all_fields(self, sample_config_yaml, tmp_path):
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
@@ -297,17 +299,18 @@ class TestScanJsonOutput:
                 ],
                 total_scanned=1,
             )
-            result = runner.invoke(
-                app,
-                ["scan", "--json", "--config", str(sample_config_yaml)],
-            )
-            data = json.loads(result.stdout)
-            repo = data["repos"][0]
-            assert "path" in repo
-            assert "branch" in repo
-            assert "status" in repo
-            assert "has_stash" in repo
-            assert repo["has_stash"] is True
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--json", "--config", str(sample_config_yaml)],
+                )
+        data = json.loads(result.stdout)
+        repo = data["repos"][0]
+        assert "path" in repo
+        assert "branch" in repo
+        assert "status" in repo
+        assert "has_stash" in repo
+        assert repo["has_stash"] is True
 
 
 class TestScanStatusFilter:
@@ -315,93 +318,66 @@ class TestScanStatusFilter:
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
             mock_scan.return_value = ScanResult(
                 repos=[
-                    RepoInfo(
-                        path=tmp_path / "repo1",
-                        branch="main",
-                        status=RepoStatus.CLEAN,
-                    ),
-                    RepoInfo(
-                        path=tmp_path / "repo2",
-                        branch="main",
-                        status=RepoStatus.DIRTY,
-                    ),
+                    RepoInfo(path=tmp_path / "repo1", branch="main", status=RepoStatus.CLEAN),
+                    RepoInfo(path=tmp_path / "repo2", branch="main", status=RepoStatus.DIRTY),
                 ],
                 total_scanned=2,
             )
-            result = runner.invoke(
-                app,
-                ["scan", "--json", "--status", "dirty", "--config", str(sample_config_yaml)],
-            )
-            assert result.exit_code == 0
-            data = json.loads(result.stdout)
-            assert len(data["repos"]) == 1
-            assert data["repos"][0]["status"] == "dirty"
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--json", "--status", "dirty", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert len(data["repos"]) == 1
+        assert data["repos"][0]["status"] == "dirty"
 
     def test_filters_by_multiple_statuses(self, sample_config_yaml, tmp_path):
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
             mock_scan.return_value = ScanResult(
                 repos=[
-                    RepoInfo(
-                        path=tmp_path / "repo1",
-                        branch="main",
-                        status=RepoStatus.CLEAN,
-                    ),
-                    RepoInfo(
-                        path=tmp_path / "repo2",
-                        branch="main",
-                        status=RepoStatus.DIRTY,
-                    ),
-                    RepoInfo(
-                        path=tmp_path / "repo3",
-                        branch="main",
-                        status=RepoStatus.AHEAD,
-                    ),
+                    RepoInfo(path=tmp_path / "repo1", branch="main", status=RepoStatus.CLEAN),
+                    RepoInfo(path=tmp_path / "repo2", branch="main", status=RepoStatus.DIRTY),
+                    RepoInfo(path=tmp_path / "repo3", branch="main", status=RepoStatus.AHEAD),
                 ],
                 total_scanned=3,
             )
-            result = runner.invoke(
-                app,
-                [
-                    "scan",
-                    "--json",
-                    "--status",
-                    "dirty,ahead",
-                    "--config",
-                    str(sample_config_yaml),
-                ],
-            )
-            assert result.exit_code == 0
-            data = json.loads(result.stdout)
-            assert len(data["repos"]) == 2
-            statuses = {r["status"] for r in data["repos"]}
-            assert statuses == {"dirty", "ahead"}
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    [
+                        "scan",
+                        "--json",
+                        "--status",
+                        "dirty,ahead",
+                        "--config",
+                        str(sample_config_yaml),
+                    ],
+                )
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert len(data["repos"]) == 2
+        statuses = {r["status"] for r in data["repos"]}
+        assert statuses == {"dirty", "ahead"}
 
 
 class TestScanCiFlag:
     def test_ci_flag_adds_status(self, sample_config_yaml, tmp_path):
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
-            mock_scan.return_value = ScanResult(
-                repos=[
-                    RepoInfo(
-                        path=tmp_path / "repo1",
-                        branch="main",
-                        status=RepoStatus.CLEAN,
-                    )
-                ],
-                total_scanned=1,
-            )
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
             with patch("git_repo_checker.cli._add_ci_status") as mock_ci:
-                result = runner.invoke(
-                    app,
-                    ["scan", "--ci", "--config", str(sample_config_yaml)],
-                )
-                assert result.exit_code == 0
-                mock_ci.assert_called_once()
+                with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                    result = runner.invoke(
+                        app,
+                        ["scan", "--ci", "--config", str(sample_config_yaml)],
+                    )
+                    assert result.exit_code == 0
+                    mock_ci.assert_called_once()
 
 
 class TestSyncDryRunDetails:
     def test_dry_run_shows_pull_targets(self, tmp_path):
-        # Create a directory that will be treated as existing repo
         repo_dir = tmp_path / "existing_repo"
         repo_dir.mkdir()
 
@@ -436,18 +412,230 @@ class TestFilterByStatusHelper:
     def test_warns_on_invalid_status(self, sample_config_yaml, tmp_path):
         with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
             mock_scan.return_value = ScanResult(
-                repos=[
-                    RepoInfo(
-                        path=tmp_path / "repo1",
-                        branch="main",
-                        status=RepoStatus.CLEAN,
-                    )
-                ],
+                repos=[RepoInfo(path=tmp_path / "repo1", branch="main", status=RepoStatus.CLEAN)],
                 total_scanned=1,
             )
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--status", "invalid_status", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        assert "Warning" in result.stdout or "unknown" in result.stdout.lower()
+
+
+class TestScanAutoTrack:
+    def test_auto_track_runs_by_default(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
+            with patch(_AUTO_TRACK, return_value=(1, 0, [])) as mock_track:
+                with patch(
+                    "git_repo_checker.cli.sync_module.default_repos_target",
+                    return_value=tmp_path / "repos.yml",
+                ):
+                    result = runner.invoke(
+                        app,
+                        ["scan", "--config", str(sample_config_yaml)],
+                    )
+            assert result.exit_code == 0
+            mock_track.assert_called_once()
+            assert "Tracked" in result.stdout
+
+    def test_no_track_flag_disables(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
+            with patch(_AUTO_TRACK) as mock_track:
+                result = runner.invoke(
+                    app,
+                    ["scan", "--no-track", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        mock_track.assert_not_called()
+
+    def test_export_repos_still_works(self, sample_config_yaml, tmp_path):
+        export_path = tmp_path / "out.yml"
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
+            with patch(
+                "git_repo_checker.cli.sync_module.export_repos_to_file",
+                return_value=(1, 0, []),
+            ) as mock_export:
+                with patch(_AUTO_TRACK) as mock_track:
+                    result = runner.invoke(
+                        app,
+                        [
+                            "scan",
+                            "--export-repos",
+                            str(export_path),
+                            "--config",
+                            str(sample_config_yaml),
+                        ],
+                    )
+        assert result.exit_code == 0
+        mock_export.assert_called_once()
+        mock_track.assert_not_called()
+
+    def test_auto_track_silent_in_json(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = _scan_result_with_repos(tmp_path)
+            with patch(_AUTO_TRACK, return_value=(1, 0, [])):
+                with patch(
+                    "git_repo_checker.cli.sync_module.default_repos_target",
+                    return_value=tmp_path / "repos.yml",
+                ):
+                    result = runner.invoke(
+                        app,
+                        ["scan", "--json", "--config", str(sample_config_yaml)],
+                    )
+        assert result.exit_code == 0
+        # Should be valid JSON with no human text mixed in
+        data = json.loads(result.stdout)
+        assert "total_scanned" in data
+        assert "Tracked" not in result.stdout
+
+    def test_auto_track_skipped_when_no_repos(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = ScanResult(repos=[], total_scanned=0)
+            with patch(_AUTO_TRACK) as mock_track:
+                result = runner.invoke(
+                    app,
+                    ["scan", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        mock_track.assert_not_called()
+
+
+class TestScanErrorsOutput:
+    def test_json_includes_scan_errors(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = ScanResult(
+                repos=[RepoInfo(path=tmp_path / "r", branch="main", status=RepoStatus.CLEAN)],
+                scan_errors=["Permission denied: /x"],
+                total_scanned=1,
+            )
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--json", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data["scan_errors"] == ["Permission denied: /x"]
+
+    def test_human_output_shows_scan_warnings(self, sample_config_yaml, tmp_path):
+        with patch("git_repo_checker.cli.scan_and_analyze") as mock_scan:
+            mock_scan.return_value = ScanResult(
+                repos=[RepoInfo(path=tmp_path / "r", branch="main", status=RepoStatus.CLEAN)],
+                scan_errors=["Permission denied: /x"],
+                total_scanned=1,
+            )
+            with patch(_AUTO_TRACK, return_value=(0, 0, [])):
+                result = runner.invoke(
+                    app,
+                    ["scan", "--config", str(sample_config_yaml)],
+                )
+        assert result.exit_code == 0
+        assert "Scan warnings" in result.stdout
+
+
+class TestScheduleCommand:
+    def test_install_minutes(self, tmp_path):
+        with patch("git_repo_checker.cli.schedule_module.install") as mock_install:
+            mock_install.return_value = tmp_path / "test.plist"
             result = runner.invoke(
                 app,
-                ["scan", "--status", "invalid_status", "--config", str(sample_config_yaml)],
+                ["schedule", "install", "--interval", "30", "--unit", "minutes"],
             )
-            assert result.exit_code == 0
-            assert "Warning" in result.stdout or "unknown" in result.stdout.lower()
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with(1800, [])
+
+    def test_install_seconds(self, tmp_path):
+        with patch("git_repo_checker.cli.schedule_module.install") as mock_install:
+            mock_install.return_value = tmp_path / "test.plist"
+            result = runner.invoke(
+                app,
+                ["schedule", "install", "--interval", "90", "--unit", "seconds"],
+            )
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with(90, [])
+
+    def test_install_rejects_bad_unit(self):
+        result = runner.invoke(
+            app,
+            ["schedule", "install", "--interval", "5", "--unit", "hours"],
+        )
+        assert result.exit_code != 0
+
+    def test_install_rejects_zero_interval(self, tmp_path):
+        result = runner.invoke(
+            app,
+            ["schedule", "install", "--interval", "0", "--unit", "minutes"],
+        )
+        assert result.exit_code != 0
+
+    def test_uninstall_reports_removed(self):
+        with patch("git_repo_checker.cli.schedule_module.uninstall", return_value=True):
+            result = runner.invoke(app, ["schedule", "uninstall"])
+        assert result.exit_code == 0
+        assert "Removed" in result.stdout
+
+    def test_uninstall_reports_absent(self):
+        with patch("git_repo_checker.cli.schedule_module.uninstall", return_value=False):
+            result = runner.invoke(app, ["schedule", "uninstall"])
+        assert result.exit_code == 0
+        assert "Nothing" in result.stdout
+
+    def test_status_not_installed(self):
+        status = ScheduleStatus(
+            installed=False,
+            loaded=False,
+            interval_seconds=None,
+            plist_path=Path("/tmp/test.plist"),
+        )
+        with patch("git_repo_checker.cli.schedule_module.get_status", return_value=status):
+            result = runner.invoke(app, ["schedule", "status"])
+        assert result.exit_code == 0
+        assert "not installed" in result.stdout.lower()
+
+    def test_status_installed(self, tmp_path):
+        plist = tmp_path / "test.plist"
+        status = ScheduleStatus(
+            installed=True,
+            loaded=True,
+            interval_seconds=3600,
+            plist_path=plist,
+            program_args=["/grc", "sync", "--quiet"],
+        )
+        with patch("git_repo_checker.cli.schedule_module.get_status", return_value=status):
+            result = runner.invoke(app, ["schedule", "status"])
+        assert result.exit_code == 0
+        assert "3600" in result.stdout
+        assert "test.plist" in result.stdout
+
+    def test_install_with_repos_path(self, tmp_path):
+        repos = tmp_path / "repos.yml"
+        with patch("git_repo_checker.cli.schedule_module.install") as mock_install:
+            mock_install.return_value = tmp_path / "test.plist"
+            result = runner.invoke(
+                app,
+                ["schedule", "install", "--repos", str(repos)],
+            )
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with(3600, ["--repos", str(repos)])
+
+    def test_install_runtime_error(self):
+        with patch(
+            "git_repo_checker.cli.schedule_module.install",
+            side_effect=RuntimeError("launchctl failed"),
+        ):
+            result = runner.invoke(app, ["schedule", "install"])
+        assert result.exit_code == 1
+        assert "Error" in result.stdout
+
+    def test_uninstall_runtime_error(self):
+        with patch(
+            "git_repo_checker.cli.schedule_module.uninstall",
+            side_effect=RuntimeError("unload failed"),
+        ):
+            result = runner.invoke(app, ["schedule", "uninstall"])
+        assert result.exit_code == 1
