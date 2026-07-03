@@ -362,6 +362,69 @@ def check(
         reporter.display_warnings([repo_info])
 
 
+def _load_config_or_default(config_path: Path | None) -> Config:
+    """Load config, falling back to defaults when none is found.
+
+    Args:
+        config_path: Explicit config path, or None to search defaults.
+
+    Returns:
+        Loaded Config, or a default Config if no file exists.
+    """
+    try:
+        return config_module.load_config(config_path)
+    except FileNotFoundError:
+        return Config()
+
+
+_ADD_MESSAGES = {
+    "not_git": ("red", "Not a git repository"),
+    "no_remote": ("red", "No 'origin' remote configured"),
+    "ignored": ("yellow", "Has a .grcignore marker (remove it to track)"),
+    "exists": ("dim", "Already tracked"),
+}
+
+
+@app.command()
+def add(
+    repo_path: Annotated[
+        Path,
+        typer.Argument(help="Repository to add (default: current directory)"),
+    ] = Path("."),
+    repos_path: Annotated[
+        Path | None,
+        typer.Option("-r", "--repos", help="repos.yml to update (default: central config)"),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("-c", "--config", help="Path to config file"),
+    ] = None,
+    path_prefix: Annotated[
+        str,
+        typer.Option("--path-prefix", "-p", help="Prefix to relativize the repo path"),
+    ] = "~",
+) -> None:
+    """Add a single repository to repos.yml for syncing."""
+    config = _load_config_or_default(config_path)
+    target = repos_path or sync_module.default_repos_target(config.auto_track.repos_file)
+    effective_prefix = path_prefix if path_prefix != "~" else config.auto_track.path_prefix
+
+    status, detail = sync_module.add_repo(repo_path, target, effective_prefix)
+
+    if status == "added":
+        added_path = shorten_path(repo_path.expanduser().resolve())
+        console.print(f"[green]Added[/] {added_path} -> {target}")
+        return
+    if status == "collision":
+        console.print(f"[yellow]Path already tracked with a different remote:[/] {detail}")
+        raise typer.Exit(1)
+
+    style, message = _ADD_MESSAGES[status]
+    console.print(f"[{style}]{message}[/]")
+    if status in ("not_git", "no_remote"):
+        raise typer.Exit(1)
+
+
 @app.command()
 def sync(
     repos_path: Annotated[

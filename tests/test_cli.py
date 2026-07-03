@@ -111,6 +111,62 @@ class TestCheckCommand:
         assert result.exit_code == 0
 
 
+class TestAddCommand:
+    def test_adds_repo(self, tmp_path):
+        target = tmp_path / "repos.yml"
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("added", "git@github.com:u/r.git")
+            result = runner.invoke(
+                app, ["add", str(tmp_path / "repo"), "--repos", str(target)]
+            )
+        assert result.exit_code == 0
+        assert "Added" in result.stdout
+
+    def test_defaults_to_current_directory(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("added", "git@github.com:u/r.git")
+            result = runner.invoke(app, ["add", "--repos", str(tmp_path / "repos.yml")])
+        assert result.exit_code == 0
+        called_path = mock_add.call_args.args[0]
+        assert Path(called_path) == Path(".")
+
+    def test_fails_for_non_git(self, tmp_path):
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("not_git", None)
+            result = runner.invoke(app, ["add", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "Not a git repository" in result.stdout
+
+    def test_fails_for_no_remote(self, tmp_path):
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("no_remote", None)
+            result = runner.invoke(app, ["add", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "remote" in result.stdout.lower()
+
+    def test_reports_collision(self, tmp_path):
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("collision", "git@github.com:u/other.git")
+            result = runner.invoke(app, ["add", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "already tracked" in result.stdout.lower()
+
+    def test_already_tracked_succeeds(self, tmp_path):
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("exists", "git@github.com:u/r.git")
+            result = runner.invoke(app, ["add", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "Already tracked" in result.stdout
+
+    def test_grcignore_marker_reported(self, tmp_path):
+        with patch("git_repo_checker.cli.sync_module.add_repo") as mock_add:
+            mock_add.return_value = ("ignored", None)
+            result = runner.invoke(app, ["add", str(tmp_path)])
+        assert result.exit_code == 0
+        assert ".grcignore" in result.stdout
+
+
 class TestGetConfig:
     def test_applies_verbose_flag(self, sample_config_yaml):
         from git_repo_checker.cli import get_config

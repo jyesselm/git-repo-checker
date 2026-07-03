@@ -10,6 +10,7 @@ import yaml
 from git_repo_checker import git_ops
 from git_repo_checker.models import (
     RepoInfo,
+    RepoStatus,
     SyncAction,
     SyncRepoResult,
     SyncResult,
@@ -618,6 +619,55 @@ def auto_track_repos(
         Tuple of (added, skipped, collisions) — same shape as export_repos_to_file.
     """
     return export_repos_to_file(repos, target, path_prefix, merge=True)
+
+
+def add_repo(
+    repo_path: Path,
+    target: Path,
+    path_prefix: str = "~",
+) -> tuple[str, str | None]:
+    """Add a single local git repository to a repos.yml file.
+
+    Creates the file if missing and merges (never overwrites) if present.
+
+    Args:
+        repo_path: Path to the local repository to track.
+        target: repos.yml to update.
+        path_prefix: Prefix used to relativize the repo path.
+
+    Returns:
+        Tuple of (status, detail):
+          - ("not_git", None)      path is not a git repository
+          - ("ignored", None)      repo has a ``.grcignore`` marker
+          - ("no_remote", None)    repo has no 'origin' remote
+          - ("collision", remote)  path already tracked with a different remote
+          - ("exists", remote)     this remote is already tracked
+          - ("added", remote)      repo was appended to the file
+    """
+    repo_path = repo_path.expanduser().resolve()
+    if not (repo_path / ".git").exists():
+        return ("not_git", None)
+    if (repo_path / IGNORE_MARKER).exists():
+        return ("ignored", None)
+
+    remote = git_ops.get_remote_url(repo_path)
+    if not remote:
+        return ("no_remote", None)
+
+    try:
+        branch = git_ops.get_current_branch(repo_path)
+    except git_ops.GitError:
+        branch = "main"
+
+    repo = RepoInfo(path=repo_path, branch=branch, status=RepoStatus.CLEAN)
+    added, _skipped, collisions = export_repos_to_file(
+        [repo], target, path_prefix, merge=True
+    )
+    if collisions:
+        return ("collision", collisions[0][2])
+    if added:
+        return ("added", remote)
+    return ("exists", remote)
 
 
 def default_repos_target(config_target: str | None) -> Path:

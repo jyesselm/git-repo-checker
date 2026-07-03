@@ -519,6 +519,91 @@ class TestAutoTrackRepos:
         assert added == 1
 
 
+class TestAddRepo:
+    def _git_repo(self, tmp_path: Path, name: str = "my-repo") -> Path:
+        repo_dir = tmp_path / name
+        (repo_dir / ".git").mkdir(parents=True)
+        return repo_dir
+
+    def test_adds_repo_with_remote(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        target = tmp_path / "repos.yml"
+
+        with (
+            patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote,
+            patch("git_repo_checker.sync.git_ops.get_current_branch") as mock_branch,
+        ):
+            mock_remote.return_value = "git@github.com:u/r.git"
+            mock_branch.return_value = "main"
+            status, detail = sync.add_repo(repo_dir, target, path_prefix=str(tmp_path))
+
+        assert status == "added"
+        assert detail == "git@github.com:u/r.git"
+        assert "my-repo" in target.read_text()
+
+    def test_rejects_non_git_path(self, tmp_path):
+        not_git = tmp_path / "plain"
+        not_git.mkdir()
+        status, detail = sync.add_repo(not_git, tmp_path / "repos.yml")
+        assert status == "not_git"
+        assert detail is None
+
+    def test_rejects_grcignore_marker(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        (repo_dir / sync.IGNORE_MARKER).touch()
+        status, _detail = sync.add_repo(repo_dir, tmp_path / "repos.yml")
+        assert status == "ignored"
+
+    def test_rejects_repo_without_remote(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        with patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote:
+            mock_remote.return_value = None
+            status, _detail = sync.add_repo(repo_dir, tmp_path / "repos.yml")
+        assert status == "no_remote"
+
+    def test_reports_already_tracked(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        target = tmp_path / "repos.yml"
+        with (
+            patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote,
+            patch("git_repo_checker.sync.git_ops.get_current_branch") as mock_branch,
+        ):
+            mock_remote.return_value = "git@github.com:u/r.git"
+            mock_branch.return_value = "main"
+            sync.add_repo(repo_dir, target, path_prefix=str(tmp_path))
+            status, _detail = sync.add_repo(repo_dir, target, path_prefix=str(tmp_path))
+        assert status == "exists"
+
+    def test_reports_path_collision(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        target = tmp_path / "repos.yml"
+        target.write_text(
+            f"path_prefix: {tmp_path}\nrepos:\n"
+            f"  - path: my-repo\n    remote: git@github.com:u/other.git\n"
+        )
+        with (
+            patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote,
+            patch("git_repo_checker.sync.git_ops.get_current_branch") as mock_branch,
+        ):
+            mock_remote.return_value = "git@github.com:u/r.git"
+            mock_branch.return_value = "main"
+            status, detail = sync.add_repo(repo_dir, target, path_prefix=str(tmp_path))
+        assert status == "collision"
+        assert detail == "git@github.com:u/other.git"
+
+    def test_falls_back_to_main_on_branch_error(self, tmp_path):
+        repo_dir = self._git_repo(tmp_path)
+        target = tmp_path / "repos.yml"
+        with (
+            patch("git_repo_checker.sync.git_ops.get_remote_url") as mock_remote,
+            patch("git_repo_checker.sync.git_ops.get_current_branch") as mock_branch,
+        ):
+            mock_remote.return_value = "git@github.com:u/r.git"
+            mock_branch.side_effect = sync.git_ops.GitError("boom", repo_dir)
+            status, _detail = sync.add_repo(repo_dir, target, path_prefix=str(tmp_path))
+        assert status == "added"
+
+
 class TestDefaultReposTarget:
     def test_uses_explicit_config_target(self, tmp_path):
         explicit = str(tmp_path / "explicit.yml")

@@ -100,6 +100,30 @@ auto_track:
   touch /path/to/my-private-repo/.grcignore
   ```
 
+### `grc add` - Track a Single Repository
+
+Add one local repository to repos.yml (the counterpart to auto-track for when you want to add a repo explicitly).
+
+```bash
+# Add the repo in the current directory
+grc add
+
+# Add a specific repo
+grc add ~/code/my-project
+
+# Add to a specific repos.yml
+grc add ~/code/my-project --repos ~/my-repos.yml
+```
+
+By default it writes to the central `~/.config/git-repo-checker/repos.yml` (same target as auto-track, and overridable with `auto_track.repos_file`). The repo must be a git repository with an `origin` remote; a repo carrying a `.grcignore` marker is refused.
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `-r, --repos PATH` | repos.yml to update (default: central config) |
+| `-c, --config PATH` | Path to config file |
+| `-p, --path-prefix PATH` | Prefix to relativize the repo path |
+
 ### `grc sync` - Sync Repositories
 
 Clone missing repositories and pull updates for existing ones based on a repos.yml file.
